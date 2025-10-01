@@ -6,12 +6,22 @@ require("dotenv").config({ path: path.join(__dirname, '.env') });
 const app = express();
 
 // CORS configuration
-app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+const rawOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || "http://localhost:3000";
+const allowedOrigins = rawOrigins.split(",").map((o) => o.trim());
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // allow non-browser requests
+      const isAllowed = allowedOrigins.some((o) => o === origin);
+      if (isAllowed) return callback(null, true);
+      return callback(new Error(`CORS blocked: ${origin} not in allowed origins`));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 
 // Middleware
 app.use(express.json());
