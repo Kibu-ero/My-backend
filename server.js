@@ -23,6 +23,22 @@ app.use(
   })
 );
 
+// Ensure preflight OPTIONS requests are handled with CORS headers
+app.options(
+  '*',
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const isAllowed = allowedOrigins.some((o) => o === origin);
+      if (isAllowed) return callback(null, true);
+      return callback(new Error(`CORS blocked: ${origin} not in allowed origins`));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+
 // Middleware
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
