@@ -317,6 +317,8 @@ exports.getBillByCustomerId = async (req, res) => {
       values.push(status);
     }
 
+    query += " ORDER BY b.created_at DESC";
+
     const result = await pool.query(query, values);
 
     if (result.rows.length === 0) {
