@@ -4,7 +4,8 @@ const path = require('path');
 require("dotenv").config({ path: path.join(__dirname, '.env') });
 
 const app = express();
-
+// const settingsRoutes = require('./routes/settings');
+// app.use('/api/settings', settingsRoutes);
 // CORS configuration
 const rawOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || "http://localhost:3000";
 const allowedOrigins = rawOrigins.split(",").map((o) => o.trim());
