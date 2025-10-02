@@ -21,7 +21,7 @@ const getCustomerBills = async (req, res) => {
       '  updated_at',
       'FROM billing',
       'WHERE customer_id = $1',
-      'ORDER BY due_date ASC'
+      'ORDER BY created_at DESC'
     ].join('\n');
 
     console.log('Executing query:\n', query);
