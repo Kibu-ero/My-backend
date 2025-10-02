@@ -66,6 +66,7 @@ const auditLogsRoutes = require('./routes/auditLogs');
 const { router: otpRoutes } = require('./routes/otp');
 const penaltyRoutes = require('./src/routes/penalties');
 const creditRoutes = require('./src/routes/credits');
+const settingsRoutes = require('./routes/settings');
 
 // Initialize automatic penalty processing
 const { schedulePenaltyProcessing } = require('./src/utils/scheduler');
@@ -88,6 +89,7 @@ app.use('/api/audit-logs', auditLogsRoutes);
 app.use('/api/otp', otpRoutes);
 app.use('/api/penalties', penaltyRoutes);
 app.use('/api/credits', creditRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
