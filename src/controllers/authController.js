@@ -249,8 +249,6 @@ exports.approveRegistration = async (req, res) => {
     await pool.query('UPDATE customer_accounts SET status = $1 WHERE id = $2', ['Approved', userId]);
 
     // Environment
-    const SEMAPHORE_API_KEY = process.env.SEMAPHORE_API_KEY;
-    const SEMAPHORE_SENDERNAME = process.env.SEMAPHORE_SENDERNAME || 'SEMAPHORE';
     const MOCEAN_API_TOKEN = process.env.MOCEAN_API_TOKEN;
     const MOCEAN_BRAND = process.env.MOCEAN_BRAND || 'Billink';
 
