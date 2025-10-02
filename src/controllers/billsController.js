@@ -29,12 +29,24 @@ const getCustomerBills = async (req, res) => {
     const result = await db.query(query, [customerId]);
     console.log('Query result:', result.rows);
 
-    const formattedBills = result.rows.map(bill => ({
-      ...bill,
-      dueDate: bill.due_date ? bill.due_date.toISOString().split('T')[0] : null,
-      createdAt: bill.created_at ? bill.created_at.toISOString().split('T')[0] : null,
-      updatedAt: bill.updated_at ? bill.updated_at.toISOString().split('T')[0] : null,
-    }));
+    const formattedBills = result.rows.map(bill => {
+      // Format dates in local time to avoid UTC shifting
+      const formatDate = (date) => {
+        if (!date) return null;
+        const d = new Date(date);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      };
+      
+      return {
+        ...bill,
+        dueDate: formatDate(bill.due_date),
+        createdAt: formatDate(bill.created_at),
+        updatedAt: formatDate(bill.updated_at),
+      };
+    });
 
     console.log('API about to send bills:', formattedBills);
 
