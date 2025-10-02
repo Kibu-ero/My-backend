@@ -43,6 +43,9 @@ app.options(
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+app.get('/api/health', (req, res) => {
+res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 // Middleware for logging incoming requests
 app.use((req, res, next) => {
   console.log(`Incoming request: ${req.method} ${req.url}`);
