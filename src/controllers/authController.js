@@ -247,7 +247,8 @@ exports.approveRegistration = async (req, res) => {
     }
     // Update status to Approved
     await pool.query('UPDATE customer_accounts SET status = $1 WHERE id = $2', ['Approved', userId]);
-    // Generate and send OTP via Mocean Verify if configured, else fallback to Semaphore
+
+    // Environment
     const SEMAPHORE_API_KEY = process.env.SEMAPHORE_API_KEY;
     const SEMAPHORE_SENDERNAME = process.env.SEMAPHORE_SENDERNAME || 'SEMAPHORE';
     const MOCEAN_API_TOKEN = process.env.MOCEAN_API_TOKEN;
@@ -267,50 +268,34 @@ exports.approveRegistration = async (req, res) => {
     const { otpStore } = require('../../routes/otp');
     const recipientNumber63 = normalizeToPH63Format(user.phone_number);
 
+    // FORCE SMS: Always send local OTP via Mocean SMS when token available (skip Verify)
     if (MOCEAN_API_TOKEN) {
       try {
         // Validate number format for Mocean (63 + 10 digits)
         if (!/^63\d{10}$/.test(recipientNumber63)) {
           return res.status(400).json({ message: 'Invalid phone format. Use 63XXXXXXXXXX (PH).', otpSent: false });
         }
-        const params = new URLSearchParams({ 'mocean-to': recipientNumber63, 'mocean-brand': MOCEAN_BRAND });
-        const mres = await axios.post(
-          'https://rest.moceanapi.com/rest/2/verify',
-          params,
-          { headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` } }
-        );
-        const data = mres.data || {};
-        const reqId = data.reqid || data.request_id || data.mocean_reqid;
+        const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+        const otp = generateOTP();
         const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-        otpStore.set(user.phone_number, { provider: 'mocean', reqId, expiresAt, purpose: 'registration', userId: user.id });
-        console.log('[APPROVE REGISTRATION] OTP sent via Mocean Verify:', { status: data.status, reqId });
-        return res.json({ message: 'User approved and OTP sent.', userId, otpSent: true, provider: 'mocean' });
-      } catch (e) {
-        const providerError = e?.response?.data;
-        console.error('[APPROVE REGISTRATION] Mocean Verify failed:', providerError || e.message);
-        // Fallback to Mocean SMS with locally generated OTP
-        try {
-          const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
-          const otp = generateOTP();
-          const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-          otpStore.set(user.phone_number, { otp, expiresAt, purpose: 'registration', userId: user.id });
+        otpStore.set(user.phone_number, { otp, expiresAt, purpose: 'registration', userId: user.id });
 
-          const smsBody = new URLSearchParams({
-            'mocean-from': MOCEAN_BRAND,
-            'mocean-to': recipientNumber63,
-            'mocean-text': `Your Billink verification code is ${otp}. It expires in 5 minutes.`
-          });
-          await axios.post('https://rest.moceanapi.com/rest/2/sms', smsBody, {
-            headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` }
-          });
-          console.log('[APPROVE REGISTRATION] OTP sent via Mocean SMS fallback');
-          return res.json({ message: 'User approved and OTP sent.', userId, otpSent: true, provider: 'mocean_sms' });
-        } catch (smsErr) {
-          console.error('[APPROVE REGISTRATION] Mocean SMS fallback failed:', smsErr?.response?.data || smsErr.message);
-          return res.status(502).json({ message: 'User approved, but failed to send OTP via Mocean.', otpSent: false, provider: 'mocean', details: providerError || e.message });
-        }
+        const smsBody = new URLSearchParams({
+          'mocean-from': MOCEAN_BRAND,
+          'mocean-to': recipientNumber63,
+          'mocean-text': `Your Billink verification code is ${otp}. It expires in 5 minutes.`
+        });
+        await axios.post('https://rest.moceanapi.com/rest/2/sms', smsBody, {
+          headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` }
+        });
+        console.log('[APPROVE REGISTRATION] OTP sent via Mocean SMS (forced)');
+        return res.json({ message: 'User approved and OTP sent.', userId, otpSent: true, provider: 'mocean_sms' });
+      } catch (e) {
+        console.error('[APPROVE REGISTRATION] Forced Mocean SMS failed:', e?.response?.data || e.message);
+        return res.status(502).json({ message: 'User approved, but failed to send OTP via Mocean SMS.', otpSent: false, provider: 'mocean_sms', details: e?.response?.data || e.message });
       }
     }
+
     // No Mocean configured
     console.log('[APPROVE REGISTRATION] No MOCEAN_API_TOKEN configured. Cannot send OTP.');
     return res.status(500).json({ message: 'OTP provider not configured. Set MOCEAN_API_TOKEN.', userId, otpSent: false });
