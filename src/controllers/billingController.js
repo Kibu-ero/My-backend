@@ -28,9 +28,9 @@ exports.createBill = async (req, res) => {
     // 4. Calculate water consumption
     const consumption = currReading - prevReading;
 
-    // Fetch customer birthdate
+    // Fetch customer data (birthdate for age calculation and phone for SMS)
     const customerResult = await pool.query(
-      'SELECT birthdate FROM customer_accounts WHERE id = $1',
+      'SELECT birthdate, phone_number FROM customer_accounts WHERE id = $1',
       [customer_id]
     );
     if (customerResult.rows.length === 0) {
@@ -48,19 +48,8 @@ exports.createBill = async (req, res) => {
     let amount_due = 0;
     
     try {
-      // Get water rates from database
-      const ratesResult = await pool.query(`
-        SELECT 
-          consumption_min, 
-          consumption_max, 
-          rate_per_cubic_meter, 
-          fixed_amount
-        FROM water_rates 
-        WHERE is_active = true 
-        ORDER BY consumption_min
-      `);
-      
-      const rates = ratesResult.rows;
+      // Skip database rates - use hardcoded rates
+      const rates = [];
       
       if (rates.length === 0) {
         // Fallback to hardcoded rates if no rates in database
@@ -121,26 +110,9 @@ exports.createBill = async (req, res) => {
       // Fallback to simple calculation
       amount_due = consumption * 30; // Default rate
     }
-    // Senior citizen discount
+    // Senior citizen discount (5% for age >= 60)
     if (age >= 60) {
-      try {
-        // Get senior citizen discount from settings
-        const discountResult = await pool.query(
-          'SELECT setting_value FROM system_settings WHERE setting_key = $1',
-          ['senior_citizen_discount']
-        );
-        
-        const discountPercentage = discountResult.rows.length > 0 
-          ? parseFloat(discountResult.rows[0].setting_value) 
-          : 5; // Default 5% discount
-        
-        const discountMultiplier = (100 - discountPercentage) / 100;
-        amount_due = amount_due * discountMultiplier;
-      } catch (error) {
-        console.error('Error getting senior citizen discount:', error);
-        // Fallback to 5% discount
-        amount_due = amount_due * 0.95;
-      }
+      amount_due = amount_due * 0.95;
     }
 
     // 5. Check customer credit balance before creating bill
@@ -257,10 +229,32 @@ exports.createBill = async (req, res) => {
       if (customerPhone) {
         const due = new Date(due_date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
         const amountStr = (Math.round(finalAmountDue * 100) / 100).toFixed(2);
+        const consumptionStr = `${consumption} cu.m.`;
+        
+        let smsText = `Dolores Water District: New bill #${result.rows[0].bill_id} issued.\n`;
+        smsText += `Amount: ₱${amountStr}\n`;
+        if (finalAmountDue > 0) {
+          smsText += `Due Date: ${due}\n`;
+        }
+        smsText += `Consumption: ${consumptionStr}`;
+        
+        // Add credit info if applicable
+        if (creditApplied > 0) {
+          smsText += `\nCredit applied: ₱${creditApplied.toFixed(2)}`;
+          if (billStatus === 'Paid') {
+            smsText += '\nStatus: FULLY PAID';
+          } else if (billStatus === 'Partially Paid') {
+            smsText += `\nBalance: ₱${finalAmountDue.toFixed(2)}`;
+          }
+        }
+        
         await sendSms({
           to: customerPhone,
-          text: `Billink: New bill #${result.rows[0].bill_id} issued for ₱${amountStr}. Due on ${due}.`
+          text: smsText
         });
+        console.log(`✅ SMS notification sent to ${customerPhone} for bill ${result.rows[0].bill_id}`);
+      } else {
+        console.warn(`⚠️ No phone number found for customer ${customer_id} - SMS not sent`);
       }
     } catch (smsErr) {
       console.warn('SMS send (new bill) failed:', smsErr.message);
@@ -268,7 +262,7 @@ exports.createBill = async (req, res) => {
 
     res.status(201).json({ 
       message: responseMessage, 
-      bill: newBill.rows[0],
+      bill: result.rows[0],
       creditApplied: creditApplied,
       billStatus: billStatus
     });
