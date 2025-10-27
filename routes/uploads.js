@@ -167,10 +167,10 @@ router.put('/file/:fileId/status', verifyToken, requireRole('admin', 'cashier'),
       
       // Create a new payment submission for this file
       const createResult = await pool.query(
-        `INSERT INTO payment_submissions (customer_id, bill_id, amount, payment_method, payment_proof, status)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO payment_submissions (customer_id, bill_id, amount, payment_method, payment_proof, status, reference_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id as submission_id, bill_id, customer_id, status as current_status`,
-        [file.customer_id, null, 0, 'Proof Upload', file.file_path, 'pending']
+        [file.customer_id, null, 0, 'Proof Upload', file.file_path, 'pending', null]
       );
       
       submission = createResult.rows[0];
