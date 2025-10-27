@@ -4,7 +4,7 @@ const path = require('path');
 
 const submitPaymentProof = async (req, res) => {
   try {
-    const { billId, customerId, amount, paymentMethod, notes } = req.body;
+    const { billId, customerId, amount, paymentMethod, referenceNumber } = req.body;
     const paymentProof = req.file;
 
     if (!paymentProof) {
@@ -14,7 +14,7 @@ const submitPaymentProof = async (req, res) => {
       });
     }
 
-    console.log('Received payment submission:', { billId, customerId, amount, paymentMethod, notes });
+    console.log('Received payment submission:', { billId, customerId, amount, paymentMethod, referenceNumber });
 
     // Set search_path to public
     await db.query('SET search_path TO public');
@@ -63,9 +63,9 @@ const submitPaymentProof = async (req, res) => {
     await db.query(
       `INSERT INTO payment_submissions (
         bill_id, customer_id, amount, payment_proof, 
-        payment_method, notes
+        payment_method, reference_number
       ) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [parsedBillId, parsedCustomerId, amount, proofPath, paymentMethod, notes]
+      [parsedBillId, parsedCustomerId, amount, proofPath, paymentMethod, referenceNumber || null]
     );
 
     console.log('About to insert into customer_files:', {
@@ -96,7 +96,7 @@ const submitPaymentProof = async (req, res) => {
         action: 'payment_submitted',
         entity: 'payment_submissions',
         entity_id: parsedBillId,
-        details: { customer_id: parsedCustomerId, amount, payment_method: paymentMethod },
+        details: { customer_id: parsedCustomerId, amount, payment_method: paymentMethod, reference_number: referenceNumber },
         ip_address: req.ip
       });
     } catch (_) {}
