@@ -697,10 +697,41 @@ router.get('/revenue', async (req, res) => {
   }
 });
 
-// Daily Collector Billing Sheet - month/year and optional collector
+// Get available zones for billing sheet
+router.get('/billing-sheet-zones', async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    if (!month || !year) {
+      return res.status(400).json({ error: 'month and year are required' });
+    }
+
+    const monthMap = {
+      'JANUARY': 1,'FEBRUARY': 2,'MARCH': 3,'APRIL': 4,'MAY': 5,'JUNE': 6,
+      'JULY': 7,'AUGUST': 8,'SEPTEMBER': 9,'OCTOBER': 10,'NOVEMBER': 11,'DECEMBER': 12
+    };
+    const m = isNaN(month) ? (monthMap[String(month).toUpperCase()] || 1) : parseInt(month, 10);
+    const y = parseInt(year, 10);
+
+    const query = `
+      SELECT DISTINCT COALESCE(b.zone, 'Unspecified') AS zone
+      FROM billing b
+      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2
+        AND b.zone IS NOT NULL AND b.zone != ''
+      ORDER BY b.zone
+    `;
+
+    const result = await pool.query(query, [m, y]);
+    res.json(result.rows.map(row => row.zone));
+  } catch (err) {
+    console.error('Error fetching zones:', err);
+    res.status(500).json({ message: 'Error fetching zones' });
+  }
+});
+
+// Daily Collector Billing Sheet - month/year and optional zone/collector
 router.get('/daily-collector', async (req, res) => {
   try {
-    const { month, year, collector } = req.query; // month as 1-12 or name, year as 4-digit
+    const { month, year, collector, zone } = req.query; // month as 1-12 or name, year as 4-digit
     if (!month || !year) {
       return res.status(400).json({ error: 'month and year are required' });
     }
@@ -714,11 +745,16 @@ router.get('/daily-collector', async (req, res) => {
     const y = parseInt(year, 10);
 
     const params = [m, y];
-    let whereCollector = '';
-    if (collector) {
-      params.push(collector);
-      // No dedicated collector column exists in schema; allow matching by zone or business_type placeholder
-      whereCollector = ' AND (b.zone = $3 OR ca.barangay = $3 OR ca.city = $3)';
+    let whereFilter = '';
+    
+    // Support both collector (legacy) and zone parameter
+    const filterValue = zone || collector;
+    
+    // If filter is provided and not 'ALL', add WHERE clause
+    if (filterValue && filterValue.toUpperCase() !== 'ALL' && filterValue !== '') {
+      params.push(filterValue);
+      // Match by zone, barangay, or city
+      whereFilter = ' AND (b.zone = $3 OR ca.barangay = $3 OR ca.city = $3)';
     }
 
     const query = `
@@ -742,7 +778,7 @@ router.get('/daily-collector', async (req, res) => {
       FROM billing b
       LEFT JOIN customer_accounts ca ON b.customer_id = ca.id
       LEFT JOIN cashier_billing cb ON cb.bill_id = b.bill_id
-      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2 ${whereCollector}
+      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2 ${whereFilter}
       ORDER BY ca.last_name, ca.first_name
     `;
 
