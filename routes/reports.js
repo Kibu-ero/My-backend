@@ -744,6 +744,8 @@ router.get('/daily-collector', async (req, res) => {
     const m = isNaN(month) ? (monthMap[String(month).toUpperCase()] || 1) : parseInt(month, 10);
     const y = parseInt(year, 10);
 
+    console.log('Daily collector query params:', { month: m, year: y, collector, zone });
+
     const params = [m, y];
     let whereFilter = '';
     
@@ -782,11 +784,24 @@ router.get('/daily-collector', async (req, res) => {
       ORDER BY ca.last_name, ca.first_name
     `;
 
+    console.log('Executing query with params:', params);
     const result = await pool.query(query, params);
+    console.log(`Query returned ${result.rows.length} rows`);
+    
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching daily collector sheet:', err);
-    res.status(500).json({ message: 'Error fetching daily collector sheet' });
+    console.error('Error details:', {
+      message: err.message,
+      stack: err.stack,
+      query: err.query,
+      parameters: err.parameters
+    });
+    res.status(500).json({ 
+      error: 'Error fetching daily collector sheet',
+      message: err.message,
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
