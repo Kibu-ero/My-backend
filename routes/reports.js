@@ -697,6 +697,63 @@ router.get('/revenue', async (req, res) => {
   }
 });
 
+// Daily Collector Billing Sheet - month/year and optional collector
+router.get('/daily-collector', async (req, res) => {
+  try {
+    const { month, year, collector } = req.query; // month as 1-12 or name, year as 4-digit
+    if (!month || !year) {
+      return res.status(400).json({ error: 'month and year are required' });
+    }
+
+    // Normalize month to number 1-12
+    const monthMap = {
+      'JANUARY': 1,'FEBRUARY': 2,'MARCH': 3,'APRIL': 4,'MAY': 5,'JUNE': 6,
+      'JULY': 7,'AUGUST': 8,'SEPTEMBER': 9,'OCTOBER': 10,'NOVEMBER': 11,'DECEMBER': 12
+    };
+    const m = isNaN(month) ? (monthMap[String(month).toUpperCase()] || 1) : parseInt(month, 10);
+    const y = parseInt(year, 10);
+
+    const params = [m, y];
+    let whereCollector = '';
+    if (collector) {
+      params.push(collector);
+      // No dedicated collector column exists in schema; allow matching by zone or business_type placeholder
+      whereCollector = ' AND (b.zone = $3 OR ca.barangay = $3 OR ca.city = $3)';
+    }
+
+    const query = `
+      SELECT 
+        COALESCE(b.zone, '') AS zone,
+        COALESCE(ca.first_name || ' ' || ca.last_name, '') AS name,
+        TRIM(BOTH ', ' FROM COALESCE(ca.province,'') || ', ' || COALESCE(ca.city,'') || ', ' || COALESCE(ca.barangay,'')) AS address,
+        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN 'SC' ELSE 'ACTIVE' END AS status1,
+        COALESCE(ca.business_type,'') AS status2,
+        COALESCE(b.current_reading,0) AS present_reading,
+        COALESCE(b.previous_reading,0) AS previous_reading,
+        COALESCE(b.current_reading,0) - COALESCE(b.previous_reading,0) AS used,
+        COALESCE(b.amount_due,0) AS bill_amount,
+        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END AS scd,
+        GREATEST(COALESCE(b.amount_due,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS total_amount,
+        COALESCE(cb.receipt_number,'') AS or_number,
+        TO_CHAR(COALESCE(cb.payment_date, b.due_date), 'MM-DD') AS pay_date,
+        COALESCE(cb.penalty_paid,0) AS penalty,
+        GREATEST(COALESCE(b.amount_due,0) + COALESCE(cb.penalty_paid,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS after_due,
+        0 AS surcharge
+      FROM billing b
+      LEFT JOIN customer_accounts ca ON b.customer_id = ca.id
+      LEFT JOIN cashier_billing cb ON cb.bill_id = b.bill_id
+      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2 ${whereCollector}
+      ORDER BY ca.last_name, ca.first_name
+    `;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching daily collector sheet:', err);
+    res.status(500).json({ message: 'Error fetching daily collector sheet' });
+  }
+});
+
 // Monthly Statistics
 router.get('/monthly-stats', async (req, res) => {
   try {
