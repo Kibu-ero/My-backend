@@ -25,7 +25,28 @@ exports.createBill = async (req, res) => {
       return res.status(400).json({ message: "Current reading must be greater than or equal to previous reading" });
     }
 
-    // 4. Calculate water consumption
+    // 4. Enforce encoder limit: only 1 bill per customer per month
+    try {
+      const isEncoder = req.user?.role === 'encoder' || req.user?.role === 'Encoder';
+      if (isEncoder) {
+        // Use due_date month to determine billing month
+        const checkResult = await pool.query(
+          `SELECT 1
+           FROM billing
+           WHERE customer_id = $1
+             AND date_trunc('month', due_date::timestamp) = date_trunc('month', $2::timestamp)
+           LIMIT 1`,
+          [customer_id, due_date]
+        );
+        if (checkResult.rows.length > 0) {
+          return res.status(409).json({
+            message: 'Only one bill per customer is allowed per month for encoders.'
+          });
+        }
+      }
+    } catch (_) {}
+
+    // 5. Calculate water consumption
     const consumption = currReading - prevReading;
 
     // Fetch customer data (birthdate for age calculation and phone for SMS)
@@ -115,7 +136,7 @@ exports.createBill = async (req, res) => {
       amount_due = amount_due * 0.95;
     }
 
-    // 5. Check customer credit balance before creating bill
+    // 6. Check customer credit balance before creating bill
     const creditResult = await pool.query(
       'SELECT credit_balance FROM customer_accounts WHERE id = $1',
       [customer_id]
@@ -139,7 +160,7 @@ exports.createBill = async (req, res) => {
       billStatus = 'Partially Paid';
     }
 
-    // 6. Insert the new bill with calculated amount and status
+    // 7. Insert the new bill with calculated amount and status
     const result = await pool.query(
       `INSERT INTO billing 
        (customer_id, meter_number, previous_reading, current_reading, amount_due, due_date, status) 
@@ -148,7 +169,7 @@ exports.createBill = async (req, res) => {
       [customer_id, meter_number, prevReading, currReading, finalAmountDue, due_date, billStatus]
     );
 
-    // 7. Apply credit deduction if credit was used
+    // 8. Apply credit deduction if credit was used
     if (creditApplied > 0) {
       const newCreditBalance = customerCreditBalance - creditApplied;
       
@@ -181,7 +202,7 @@ exports.createBill = async (req, res) => {
       }
     }
 
-    // 8. Get the newly created bill with customer name
+    // 9. Get the newly created bill with customer name
     const newBill = await pool.query(`
       SELECT b.*, CONCAT(c.first_name, ' ', c.last_name) as customer_name 
       FROM billing b
@@ -282,6 +303,10 @@ exports.getAllBills = async (req, res) => {
         b.*, 
         CONCAT(c.first_name, ' ', c.last_name) as customer_name, 
         c.birthdate,
+        c.province,
+        c.city,
+        c.barangay,
+        c.street,
         cb.receipt_number,
         cb.payment_date,
         cb.amount_paid,
