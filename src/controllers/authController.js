@@ -302,3 +302,49 @@ exports.approveRegistration = async (req, res) => {
     res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+// Reset password using short-lived resetToken from /api/otp/verify-reset
+exports.resetPasswordWithToken = async (req, res) => {
+  try {
+    const { resetToken, phoneNumber, newPassword } = req.body;
+    if (!resetToken || !phoneNumber || !newPassword) {
+      return res.status(400).json({ message: 'resetToken, phoneNumber and newPassword are required' });
+    }
+
+    // Validate password strength (reuse same regex)
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]).{8,}$/;
+    if (!passwordRegex.test(newPassword)) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters long and include at least one uppercase letter, one lowercase letter, one number, and one special character.' });
+    }
+
+    // Verify reset token
+    let payload;
+    try {
+      payload = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ message: 'Invalid or expired reset token' });
+    }
+    if (payload.purpose !== 'reset' || payload.phoneNumber !== phoneNumber) {
+      return res.status(401).json({ message: 'Reset token does not match phone number' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password in customer_accounts if phone matches
+    const result = await pool.query(
+      'UPDATE customer_accounts SET password = $1, updated_at = NOW() WHERE phone_number = $2 RETURNING id, username, email, role',
+      [hashedPassword, phoneNumber]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Optionally invalidate sessions; for now, instruct user to log in
+    return res.json({ message: 'Password reset successful. Please log in with your new password.' });
+  } catch (error) {
+    console.error('❌ Reset password error:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+};
