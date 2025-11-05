@@ -43,9 +43,6 @@ app.options(
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-app.get('/api/health', (req, res) => {
-res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
 // Middleware for logging incoming requests
 app.use((req, res, next) => {
   console.log(`Incoming request: ${req.method} ${req.url}`);
@@ -97,6 +94,11 @@ app.use('/api/settings', settingsRoutes);
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// API health (useful for Vercel /api rewrite testing)
+app.get('/api/healthz', (req, res) => {
+  res.json({ status: 'ok', path: '/api/healthz', timestamp: new Date().toISOString() });
 });
 
 // Error handling
