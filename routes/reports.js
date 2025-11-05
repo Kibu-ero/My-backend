@@ -713,11 +713,13 @@ router.get('/billing-sheet-zones', async (req, res) => {
     const y = parseInt(year, 10);
 
     const query = `
-      SELECT DISTINCT COALESCE(b.zone, 'Unspecified') AS zone
+      SELECT DISTINCT 
+        COALESCE(NULLIF(TRIM(ca.barangay), ''), NULLIF(TRIM(ca.city), ''), 'Unspecified') AS zone
       FROM billing b
-      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2
-        AND b.zone IS NOT NULL AND b.zone != ''
-      ORDER BY b.zone
+      LEFT JOIN customer_accounts ca ON b.customer_id = ca.id
+      WHERE EXTRACT(MONTH FROM b.created_at) = $1 
+        AND EXTRACT(YEAR FROM b.created_at) = $2
+      ORDER BY zone
     `;
 
     const result = await pool.query(query, [m, y]);
@@ -755,13 +757,13 @@ router.get('/daily-collector', async (req, res) => {
     // If filter is provided and not 'ALL', add WHERE clause
     if (filterValue && filterValue.toUpperCase() !== 'ALL' && filterValue !== '') {
       params.push(filterValue);
-      // Match by zone, barangay, or city
-      whereFilter = ' AND (b.zone = $3 OR ca.barangay = $3 OR ca.city = $3)';
+      // Match by barangay or city (no b.zone column in current schema)
+      whereFilter = ' AND (ca.barangay = $3 OR ca.city = $3)';
     }
 
     const query = `
       SELECT 
-        COALESCE(b.zone, '') AS zone,
+        COALESCE(NULLIF(TRIM(ca.barangay), ''), NULLIF(TRIM(ca.city), ''), '') AS zone,
         COALESCE(ca.first_name || ' ' || ca.last_name, '') AS name,
         TRIM(BOTH ', ' FROM COALESCE(ca.province,'') || ', ' || COALESCE(ca.city,'') || ', ' || COALESCE(ca.barangay,'')) AS address,
         CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN 'SC' ELSE 'ACTIVE' END AS status1,
