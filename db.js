@@ -32,7 +32,24 @@ pool
   .connect()
   .then(() => {
     console.log("✅ PostgreSQL Connected!");
-    console.log(`Database: ${process.env.DB_NAME || process.env.DATABASE_URL || "DWS"}`);
+    const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+    const dbName = process.env.DB_NAME || 'DWS';
+    if (process.env.DATABASE_URL) {
+      if (isProd) {
+        try {
+          const url = new URL(process.env.DATABASE_URL);
+          url.username = '***';
+          url.password = '***';
+          console.log(`Database: ${url.toString()}`);
+        } catch {
+          console.log('Database: [hidden]');
+        }
+      } else {
+        console.log(`Database: ${process.env.DATABASE_URL}`);
+      }
+    } else {
+      console.log(`Database: ${dbName}`);
+    }
   })
   .catch((err) => {
     console.error("❌ Connection error", err);
