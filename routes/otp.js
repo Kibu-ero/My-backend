@@ -136,6 +136,69 @@ router.post('/send', async (req, res) => {
   }
 });
 
+// Start password reset: send OTP with purpose "reset"
+router.post('/start-reset', async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' });
+    // Reuse send with purpose=reset by calling local handler
+    req.body.purpose = 'reset';
+    // Fallthrough to /send logic by calling it explicitly is messy; instead, duplicate minimal steps
+    const recipientNumber63 = normalizeToPH63Format(phoneNumber);
+    if (MOCEAN_API_TOKEN) {
+      if (!validatePH63Number(recipientNumber63)) {
+        return res.status(400).json({ error: 'Invalid phone format. Use 63XXXXXXXXXX (PH).'});
+      }
+      const params = new URLSearchParams({ 'mocean-to': recipientNumber63, 'mocean-brand': MOCEAN_BRAND });
+      const mres = await axios.post('https://rest.moceanapi.com/rest/2/verify', params, { headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` } });
+      const data = mres.data || {};
+      const reqId = data.reqid || data.request_id || data.mocean_reqid;
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      otpStore.set(phoneNumber, { provider: 'mocean', reqId, expiresAt, purpose: 'reset' });
+      return res.json({ message: 'OTP sent', provider: 'mocean', reqId, status: data.status });
+    }
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    otpStore.set(phoneNumber, { otp, expiresAt, purpose: 'reset' });
+    if (!SEMAPHORE_API_KEY) return res.status(500).json({ error: 'SMS service not configured' });
+    const params = new URLSearchParams({ apikey: SEMAPHORE_API_KEY, number: recipientNumber63, message: 'Your Billink reset code is: {otp}. Valid for 5 minutes.', sendername: SEMAPHORE_SENDERNAME, code: otp });
+    const semaphoreResponse = await axios.post('https://semaphore.co/api/v4/otp', params, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    const responseData = Array.isArray(semaphoreResponse.data) ? semaphoreResponse.data[0] : semaphoreResponse.data;
+    res.json({ message: 'OTP sent', provider: 'semaphore', messageId: responseData?.message_id, status: responseData?.status, recipient: responseData?.recipient });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to start password reset', details: error?.response?.data || error.message });
+  }
+});
+
+// Verify reset OTP and return a short-lived reset token
+router.post('/verify-reset', async (req, res) => {
+  try {
+    const { phoneNumber, otp } = req.body;
+    if (!phoneNumber || !otp) return res.status(400).json({ error: 'Phone number and OTP are required' });
+    const stored = otpStore.get(phoneNumber);
+    if (!stored || stored.purpose !== 'reset') return res.status(400).json({ error: 'OTP not found or expired' });
+    if (new Date() > stored.expiresAt) { otpStore.delete(phoneNumber); return res.status(400).json({ error: 'OTP has expired' }); }
+    if (stored.provider === 'mocean') {
+      const params = new URLSearchParams({ 'mocean-reqid': stored.reqId, 'mocean-code': otp });
+      try {
+        const vres = await axios.post('https://rest.moceanapi.com/rest/2/verify/check', params, { headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` } });
+        const data = vres.data || {};
+        if (String(data.status) !== '0') return res.status(400).json({ error: 'Invalid OTP', providerStatus: data.status, detail: data.err_msg });
+      } catch (e) { return res.status(400).json({ error: 'Invalid OTP', details: e?.response?.data || e.message }); }
+    } else {
+      if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
+    }
+    // issue short-lived reset token
+    const jwt = require('jsonwebtoken');
+    const resetToken = jwt.sign({ phoneNumber, purpose: 'reset' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+    // clear OTP
+    otpStore.delete(phoneNumber);
+    res.json({ message: 'OTP verified', resetToken });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to verify reset OTP' });
+  }
+});
+
 // Verify OTP
 router.post('/verify', async (req, res) => {
   try {
