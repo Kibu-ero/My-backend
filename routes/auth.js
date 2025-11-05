@@ -18,4 +18,7 @@ router.get('/verify', verifyToken, (req, res) => {
 // Restore real Approve Registration Route
 router.post('/approve-registration', authController.approveRegistration);
 
+// Forgot password: reset with resetToken issued by /api/otp/verify-reset
+router.post('/reset-password', authController.resetPasswordWithToken);
+
 module.exports = router;
