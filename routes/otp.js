@@ -175,9 +175,22 @@ router.post('/verify-reset', async (req, res) => {
   try {
     const { phoneNumber, otp } = req.body;
     if (!phoneNumber || !otp) return res.status(400).json({ error: 'Phone number and OTP are required' });
+    
+    // First, verify the account exists BEFORE checking OTP (security: don't reveal OTP validity if account doesn't exist)
+    const accountCheck = await pool.query(
+      'SELECT id FROM customer_accounts WHERE phone_number = $1',
+      [phoneNumber]
+    );
+    
+    if (accountCheck.rows.length === 0) {
+      // Return generic error to avoid revealing account existence
+      return res.status(400).json({ error: 'Invalid OTP or phone number' });
+    }
+    
     const stored = otpStore.get(phoneNumber);
     if (!stored || stored.purpose !== 'reset') return res.status(400).json({ error: 'OTP not found or expired' });
     if (new Date() > stored.expiresAt) { otpStore.delete(phoneNumber); return res.status(400).json({ error: 'OTP has expired' }); }
+    
     if (stored.provider === 'mocean') {
       const params = new URLSearchParams({ 'mocean-reqid': stored.reqId, 'mocean-code': otp });
       try {
@@ -188,13 +201,16 @@ router.post('/verify-reset', async (req, res) => {
     } else {
       if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
     }
-    // issue short-lived reset token
+    
+    // OTP verified and account exists - issue short-lived reset token with phoneNumber embedded
     const jwt = require('jsonwebtoken');
     const resetToken = jwt.sign({ phoneNumber, purpose: 'reset' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+    
     // clear OTP
     otpStore.delete(phoneNumber);
     res.json({ message: 'OTP verified', resetToken });
   } catch (error) {
+    console.error('Error verifying reset OTP:', error);
     res.status(500).json({ error: 'Failed to verify reset OTP' });
   }
 });
