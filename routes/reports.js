@@ -807,6 +807,65 @@ router.get('/daily-collector', async (req, res) => {
   }
 });
 
+// Compatibility endpoint: billing-sheet using startDate/endDate
+// Maps the given date range to month/year and reuses the daily-collector logic
+router.get('/billing-sheet', async (req, res) => {
+  try {
+    const { startDate, endDate, zone, collector } = req.query;
+    if (!startDate) {
+      return res.status(400).json({ error: 'startDate is required' });
+    }
+
+    const start = new Date(startDate);
+    if (isNaN(start.getTime())) {
+      return res.status(400).json({ error: 'Invalid startDate' });
+    }
+
+    const month = start.getUTCMonth() + 1; // 1-12
+    const year = start.getUTCFullYear();
+
+    // Build filter (zone or collector)
+    const params = [month, year];
+    let whereFilter = '';
+    const filterValue = zone || collector;
+    if (filterValue && String(filterValue).toUpperCase() !== 'ALL' && filterValue !== '') {
+      params.push(filterValue);
+      whereFilter = ' AND (ca.barangay = $3 OR ca.city = $3)';
+    }
+
+    const query = `
+      SELECT 
+        COALESCE(NULLIF(TRIM(ca.barangay), ''), NULLIF(TRIM(ca.city), ''), '') AS zone,
+        COALESCE(ca.first_name || ' ' || ca.last_name, '') AS name,
+        TRIM(BOTH ', ' FROM COALESCE(ca.province,'') || ', ' || COALESCE(ca.city,'') || ', ' || COALESCE(ca.barangay,'')) AS address,
+        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN 'SC' ELSE 'ACTIVE' END AS status1,
+        COALESCE(ca.business_type,'') AS status2,
+        COALESCE(b.current_reading,0) AS present_reading,
+        COALESCE(b.previous_reading,0) AS previous_reading,
+        COALESCE(b.current_reading,0) - COALESCE(b.previous_reading,0) AS used,
+        COALESCE(b.amount_due,0) AS bill_amount,
+        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END AS scd,
+        GREATEST(COALESCE(b.amount_due,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS total_amount,
+        COALESCE(cb.receipt_number,'') AS or_number,
+        TO_CHAR(COALESCE(cb.payment_date, b.due_date), 'MM-DD') AS pay_date,
+        COALESCE(cb.penalty_paid,0) AS penalty,
+        GREATEST(COALESCE(b.amount_due,0) + COALESCE(cb.penalty_paid,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS after_due,
+        0 AS surcharge
+      FROM billing b
+      LEFT JOIN customer_accounts ca ON b.customer_id = ca.id
+      LEFT JOIN cashier_billing cb ON cb.bill_id = b.bill_id
+      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2 ${whereFilter}
+      ORDER BY ca.last_name, ca.first_name
+    `;
+
+    console.log('Billing-sheet (compat) params mapped to month/year:', { month, year, zone, collector });
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching billing-sheet (compat):', err);
+    res.status(500).json({ error: 'Error fetching billing sheet' });
+  }
+});
 // Monthly Statistics
 router.get('/monthly-stats', async (req, res) => {
   try {
