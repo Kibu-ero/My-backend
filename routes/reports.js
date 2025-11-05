@@ -839,7 +839,7 @@ router.get('/billing-sheet', async (req, res) => {
         COALESCE(ca.first_name || ' ' || ca.last_name, '') AS name,
         TRIM(BOTH ', ' FROM COALESCE(ca.province,'') || ', ' || COALESCE(ca.city,'') || ', ' || COALESCE(ca.barangay,'')) AS address,
         CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN 'SC' ELSE 'ACTIVE' END AS status1,
-        COALESCE(ca.business_type,'') AS status2,
+        '' AS status2,
         COALESCE(b.current_reading,0) AS present_reading,
         COALESCE(b.previous_reading,0) AS previous_reading,
         COALESCE(b.current_reading,0) - COALESCE(b.previous_reading,0) AS used,
