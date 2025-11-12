@@ -409,35 +409,16 @@ router.post('/verify-registration', async (req, res) => {
     otpStore.delete(phoneNumber);
     console.log('🗑️ [OTP VERIFICATION] OTP removed from store');
 
-    // Generate JWT token for immediate login
-    const jwt = require('jsonwebtoken');
     const user = updateResult.rows[0];
-    const token = jwt.sign(
-      { 
-        id: user.id, 
-        username: user.username,
-        email: user.email, 
-        role: user.role 
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
 
     console.log('🎉 [OTP VERIFICATION] Verification completed successfully!');
-    console.log('🎉 [OTP VERIFICATION] User email:', user.email);
+    console.log('🎉 [OTP VERIFICATION] User verified:', user.username);
 
+    // Return success message without token - user must login separately
     res.json({
-      message: 'Account verified successfully! You can now login.',
-      token,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        status: user.status
-      }
+      message: 'Account verified successfully! Please login with your credentials.',
+      verified: true,
+      username: user.username
     });
 
   } catch (error) {
