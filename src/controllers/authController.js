@@ -121,23 +121,45 @@ exports.register = async (req, res) => {
     console.log("✅ New customer registered (Pending Approval):", newUser.rows[0].email);
     console.log("📱 Phone number stored in DB:", newUser.rows[0].phone_number);
 
+    // Log audit trail for new registration (before sending response)
+    try {
+      await logAudit({
+        user_id: newUser.rows[0].id,
+        bill_id: null,
+        action: 'user_registered'
+      });
+    } catch (auditError) {
+      // Log audit error but don't fail registration
+      console.error("⚠️ Audit log failed (non-critical):", auditError.message);
+    }
+
     // Do NOT send OTP here. Just return a message.
     res.status(201).json({
       message: "Registration submitted! Please wait for admin approval.",
       user: newUser.rows[0],
       requiresOTP: false
     });
-    
-    // Log audit trail for new registration
-    await logAudit({
-      user_id: newUser.rows[0].id,
-      bill_id: null,
-      action: 'user_registered'
-    });
 
   } catch (error) {
     console.error("❌ Registration Error:", error);
-    res.status(500).json({ message: "Internal Server Error", error: error.message, code: error.code, detail: error.detail });
+    console.error("❌ Registration Error Stack:", error.stack);
+    console.error("❌ Registration Error Details:", {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      constraint: error.constraint,
+      table: error.table,
+      column: error.column
+    });
+    res.status(500).json({ 
+      message: "Internal Server Error", 
+      error: error.message, 
+      code: error.code, 
+      detail: error.detail,
+      constraint: error.constraint,
+      table: error.table,
+      column: error.column
+    });
   }
 };
 
