@@ -11,6 +11,15 @@ console.log("✅ Auth Controller Loaded");
 // **Register User (For Customers Only)**
 exports.register = async (req, res) => {
   try {
+    // Check database connection
+    if (!pool) {
+      console.error("❌ Database pool not available");
+      return res.status(500).json({ 
+        message: "Database connection not available",
+        error: "Database pool is undefined"
+      });
+    }
+
     const {
       firstName,
       lastName,
@@ -26,9 +35,40 @@ exports.register = async (req, res) => {
       phoneNumber,
     } = req.body;
 
-    // Basic required field validation
+    // Log incoming request for debugging
+    console.log("📝 Registration attempt:", {
+      username,
+      email: email ? "provided" : "not provided",
+      phoneNumber: phoneNumber ? "provided" : "not provided",
+      meterNumber: meterNumber ? "provided" : "not provided"
+    });
+
+    // Basic required field validation (email is optional)
     if (!firstName || !lastName || !username || !password || !street || !barangay || !city || !province || !birthdate || !meterNumber || !phoneNumber) {
-      return res.status(400).json({ message: "Missing required fields" });
+      return res.status(400).json({ 
+        message: "Missing required fields",
+        missing: {
+          firstName: !firstName,
+          lastName: !lastName,
+          username: !username,
+          password: !password,
+          street: !street,
+          barangay: !barangay,
+          city: !city,
+          province: !province,
+          birthdate: !birthdate,
+          meterNumber: !meterNumber,
+          phoneNumber: !phoneNumber
+        }
+      });
+    }
+
+    // Validate email format if provided
+    if (email && email.trim() !== '') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        return res.status(400).json({ message: "Please provide a valid email address." });
+      }
     }
 
     // ✅ Check if username already exists in customer_accounts only
@@ -191,16 +231,32 @@ exports.register = async (req, res) => {
       detail: error.detail,
       constraint: error.constraint,
       table: error.table,
-      column: error.column
+      column: error.column,
+      name: error.name,
+      errno: error.errno,
+      syscall: error.syscall,
+      hostname: error.hostname,
+      port: error.port
     });
+    
+    // Determine if this is a database connection error
+    const isDbError = error.code === 'ECONNREFUSED' || 
+                     error.code === 'ENOTFOUND' || 
+                     error.code === 'ETIMEDOUT' ||
+                     error.message?.includes('connect') ||
+                     error.message?.includes('Connection');
+
     res.status(500).json({ 
-      message: "Internal Server Error", 
+      message: isDbError ? "Database connection error" : "Internal Server Error", 
       error: error.message, 
       code: error.code, 
       detail: error.detail,
       constraint: error.constraint,
       table: error.table,
-      column: error.column
+      column: error.column,
+      name: error.name,
+      // Include stack trace in development
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
