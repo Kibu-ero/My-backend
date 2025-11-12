@@ -32,35 +32,50 @@ exports.register = async (req, res) => {
     }
 
     // ✅ Check if username already exists in customer_accounts only
-    const existingUsername = await pool.query(
-      "SELECT * FROM customer_accounts WHERE username = $1",
-      [username]
-    );
+    try {
+      const existingUsername = await pool.query(
+        "SELECT * FROM customer_accounts WHERE username = $1",
+        [username]
+      );
 
-    if (existingUsername.rows.length > 0) {
-      return res.status(400).json({ message: "Username is already in use." });
+      if (existingUsername.rows.length > 0) {
+        return res.status(400).json({ message: "Username is already in use." });
+      }
+    } catch (dbError) {
+      console.error("❌ Database error checking username:", dbError);
+      throw dbError; // Re-throw to be caught by outer catch
     }
 
     // ✅ Check if email already exists in customer_accounts only (if email provided)
     if (email && email.trim() !== '') {
-      const existingUser = await pool.query(
-        "SELECT * FROM customer_accounts WHERE email = $1",
-        [email]
-      );
+      try {
+        const existingUser = await pool.query(
+          "SELECT * FROM customer_accounts WHERE email = $1",
+          [email.trim()]
+        );
 
-      if (existingUser.rows.length > 0) {
-        return res.status(400).json({ message: "Email is already in use." });
+        if (existingUser.rows.length > 0) {
+          return res.status(400).json({ message: "Email is already in use." });
+        }
+      } catch (dbError) {
+        console.error("❌ Database error checking email:", dbError);
+        throw dbError; // Re-throw to be caught by outer catch
       }
     }
 
     // ✅ Check if phone number already exists
-    const existingPhone = await pool.query(
-      "SELECT * FROM customer_accounts WHERE phone_number = $1",
-      [phoneNumber]
-    );
+    try {
+      const existingPhone = await pool.query(
+        "SELECT * FROM customer_accounts WHERE phone_number = $1",
+        [phoneNumber]
+      );
 
-    if (existingPhone.rows.length > 0) {
-      return res.status(400).json({ message: "Phone number is already in use." });
+      if (existingPhone.rows.length > 0) {
+        return res.status(400).json({ message: "Phone number is already in use." });
+      }
+    } catch (dbError) {
+      console.error("❌ Database error checking phone number:", dbError);
+      throw dbError; // Re-throw to be caught by outer catch
     }
 
     // ✅ Validate birthdate and calculate age
@@ -95,28 +110,54 @@ exports.register = async (req, res) => {
     // ✅ Hash Password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // ✅ Normalize email (empty string to null)
+    const normalizedEmail = (email && email.trim() !== '') ? email.trim() : null;
+
     // ✅ Insert new customer into customer_accounts with Pending status
-    const newUser = await pool.query(
-      `INSERT INTO customer_accounts 
-      (first_name, last_name, username, email, password, street, barangay, city, province, birthdate, meter_number, phone_number, senior_citizen, role, status, created_at) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'customer', 'Pending', NOW()) 
-      RETURNING *`,
-      [
-        firstName,
-        lastName,
-        username,
-        email || null, // Allow null email
-        hashedPassword,
-        street,
-        barangay,
-        city,
-        province,
-        birthdate,
-        meterNumber,
-        phoneNumber,
-        isSeniorCitizen,
-      ]
-    );
+    let newUser;
+    try {
+      newUser = await pool.query(
+        `INSERT INTO customer_accounts 
+        (first_name, last_name, username, email, password, street, barangay, city, province, birthdate, meter_number, phone_number, senior_citizen, role, status, created_at) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'customer', 'Pending', NOW()) 
+        RETURNING *`,
+        [
+          firstName?.trim() || firstName,
+          lastName?.trim() || lastName,
+          username?.trim() || username,
+          normalizedEmail,
+          hashedPassword,
+          street?.trim() || street,
+          barangay?.trim() || barangay,
+          city?.trim() || city,
+          province?.trim() || province,
+          birthdate,
+          meterNumber?.trim() || meterNumber,
+          phoneNumber?.trim() || phoneNumber,
+          isSeniorCitizen,
+        ]
+      );
+    } catch (insertError) {
+      console.error("❌ Database insert error:", insertError);
+      // Check for specific constraint violations
+      if (insertError.code === '23505') { // Unique violation
+        const constraint = insertError.constraint;
+        if (constraint && constraint.includes('username')) {
+          return res.status(400).json({ message: "Username is already in use." });
+        }
+        if (constraint && constraint.includes('email')) {
+          return res.status(400).json({ message: "Email is already in use." });
+        }
+        if (constraint && constraint.includes('phone_number')) {
+          return res.status(400).json({ message: "Phone number is already in use." });
+        }
+        if (constraint && constraint.includes('meter_number')) {
+          return res.status(400).json({ message: "Meter number is already in use." });
+        }
+        return res.status(400).json({ message: "A record with this information already exists." });
+      }
+      throw insertError; // Re-throw to be caught by outer catch
+    }
 
     console.log("✅ New customer registered (Pending Approval):", newUser.rows[0].email);
     console.log("📱 Phone number stored in DB:", newUser.rows[0].phone_number);
@@ -125,8 +166,9 @@ exports.register = async (req, res) => {
     try {
       await logAudit({
         user_id: newUser.rows[0].id,
-        bill_id: null,
-        action: 'user_registered'
+        action: 'user_registered',
+        entity: 'customer_accounts',
+        entity_id: newUser.rows[0].id
       });
     } catch (auditError) {
       // Log audit error but don't fail registration
