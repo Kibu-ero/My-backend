@@ -363,11 +363,35 @@ router.post('/verify-registration', async (req, res) => {
       return res.status(400).json({ error: 'OTP has expired' });
     }
 
-    // Check if OTP matches
-    console.log('🔢 [OTP VERIFICATION] Comparing OTPs - Submitted:', otp, 'Stored:', storedData.otp);
-    if (storedData.otp !== otp) {
-      console.log('❌ [OTP VERIFICATION] OTP mismatch');
-      return res.status(400).json({ error: 'Invalid OTP' });
+    // Check if OTP matches (handle both Mocean and Semaphore providers)
+    if (storedData.provider === 'mocean') {
+      // For Mocean, verify via API
+      const params = new URLSearchParams({
+        'mocean-reqid': storedData.reqId,
+        'mocean-code': otp
+      });
+      try {
+        const vres = await axios.post(
+          'https://rest.moceanapi.com/rest/2/verify/check',
+          params,
+          { headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` } }
+        );
+        const data = vres.data || {};
+        if (String(data.status) !== '0') {
+          console.log('❌ [OTP VERIFICATION] Mocean OTP verification failed');
+          return res.status(400).json({ error: 'Invalid OTP', providerStatus: data.status, detail: data.err_msg });
+        }
+      } catch (e) {
+        console.log('❌ [OTP VERIFICATION] Mocean verification error:', e?.response?.data || e.message);
+        return res.status(400).json({ error: 'Invalid OTP', details: e?.response?.data || e.message });
+      }
+    } else {
+      // For Semaphore/local OTP, compare directly
+      console.log('🔢 [OTP VERIFICATION] Comparing OTPs - Submitted:', otp, 'Stored:', storedData.otp);
+      if (storedData.otp !== otp) {
+        console.log('❌ [OTP VERIFICATION] OTP mismatch');
+        return res.status(400).json({ error: 'Invalid OTP' });
+      }
     }
 
     // Check if purpose is registration
@@ -409,16 +433,35 @@ router.post('/verify-registration', async (req, res) => {
     otpStore.delete(phoneNumber);
     console.log('🗑️ [OTP VERIFICATION] OTP removed from store');
 
+    // Generate JWT token for immediate login
+    const jwt = require('jsonwebtoken');
     const user = updateResult.rows[0];
+    const token = jwt.sign(
+      { 
+        id: user.id, 
+        username: user.username,
+        email: user.email, 
+        role: user.role 
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
     console.log('🎉 [OTP VERIFICATION] Verification completed successfully!');
-    console.log('🎉 [OTP VERIFICATION] User verified:', user.username);
+    console.log('🎉 [OTP VERIFICATION] User email:', user.email);
 
-    // Return success message without token - user must login separately
     res.json({
-      message: 'Account verified successfully! Please login with your credentials.',
-      verified: true,
-      username: user.username
+      message: 'Account verified successfully! You can now login.',
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        status: user.status
+      }
     });
 
   } catch (error) {
