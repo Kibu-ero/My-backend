@@ -16,10 +16,17 @@ router.get('/', async (req, res) => {
   if (start) { query += ` AND timestamp >= $${idx++}`; params.push(start); }
   if (end) { query += ` AND timestamp <= $${idx++}`; params.push(end); }
 
-  query += ' ORDER BY timestamp DESC LIMIT 100';
+  // Increase limit to 500 and ensure we get recent entries
+  query += ' ORDER BY timestamp DESC LIMIT 500';
 
-  const { rows } = await pool.query(query, params);
-  res.json(rows);
+  try {
+    const { rows } = await pool.query(query, params);
+    console.log(`✅ Returning ${rows.length} audit log entries`);
+    res.json(rows);
+  } catch (error) {
+    console.error('❌ Error fetching audit logs:', error);
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
+  }
 });
 
 router.get('/test', (req, res) => {
