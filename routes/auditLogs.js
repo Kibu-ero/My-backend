@@ -6,18 +6,33 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   console.log("GET /api/audit-logs hit");
   const { user_id, action, bill_id, start, end } = req.query;
-  let query = 'SELECT * FROM audit_logs WHERE 1=1';
+  
+  // Build query with LEFT JOINs to get username from different tables
+  let query = `
+    SELECT 
+      al.*,
+      COALESCE(
+        ca.username,
+        u.username,
+        e.username
+      ) as username
+    FROM audit_logs al
+    LEFT JOIN customer_accounts ca ON al.user_id = ca.id
+    LEFT JOIN users u ON al.user_id = u.id
+    LEFT JOIN employees e ON al.user_id = e.id
+    WHERE 1=1
+  `;
   const params = [];
   let idx = 1;
 
-  if (user_id) { query += ` AND user_id = $${idx++}`; params.push(user_id); }
-  if (action) { query += ` AND action ILIKE $${idx++}`; params.push(`%${action}%`); }
-  if (bill_id) { query += ` AND bill_id = $${idx++}`; params.push(bill_id); }
-  if (start) { query += ` AND timestamp >= $${idx++}`; params.push(start); }
-  if (end) { query += ` AND timestamp <= $${idx++}`; params.push(end); }
+  if (user_id) { query += ` AND al.user_id = $${idx++}`; params.push(user_id); }
+  if (action) { query += ` AND al.action ILIKE $${idx++}`; params.push(`%${action}%`); }
+  if (bill_id) { query += ` AND al.bill_id = $${idx++}`; params.push(bill_id); }
+  if (start) { query += ` AND al.timestamp >= $${idx++}`; params.push(start); }
+  if (end) { query += ` AND al.timestamp <= $${idx++}`; params.push(end); }
 
   // Increase limit to 500 and ensure we get recent entries
-  query += ' ORDER BY timestamp DESC LIMIT 500';
+  query += ' ORDER BY al.timestamp DESC LIMIT 500';
 
   try {
     const { rows } = await pool.query(query, params);
@@ -25,7 +40,8 @@ router.get('/', async (req, res) => {
     res.json(rows);
   } catch (error) {
     console.error('❌ Error fetching audit logs:', error);
-    res.status(500).json({ error: 'Failed to fetch audit logs' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ error: 'Failed to fetch audit logs', details: error.message });
   }
 });
 
