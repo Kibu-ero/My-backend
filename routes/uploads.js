@@ -189,6 +189,20 @@ router.put('/file/:fileId/status', verifyToken, requireRole('admin', 'cashier'),
     
     console.log('Payment submission updated:', updateResult.rows[0]);
     
+    // Get customer info for audit log
+    let customerName = null;
+    try {
+      const customerResult = await pool.query(
+        'SELECT first_name, last_name FROM customer_accounts WHERE id = $1',
+        [submission.customer_id]
+      );
+      if (customerResult.rows.length > 0) {
+        customerName = `${customerResult.rows[0].first_name} ${customerResult.rows[0].last_name}`;
+      }
+    } catch (err) {
+      console.warn('Could not fetch customer name for audit log:', err.message);
+    }
+    
     // If approved, also update the bill status to 'Paid'
     if (status === 'approved' && submission.bill_id) {
       const billUpdateResult = await pool.query(
@@ -196,6 +210,30 @@ router.put('/file/:fileId/status', verifyToken, requireRole('admin', 'cashier'),
         ['Paid', submission.bill_id]
       );
       console.log('Bill updated:', billUpdateResult.rows[0]);
+    }
+    
+    // Audit log: Payment approval/rejection
+    try {
+      const { logAudit } = require('../utils/auditLogger');
+      await logAudit({
+        user_id: req.user?.id || null,
+        action: status === 'approved' ? 'payment_approved' : 'payment_rejected',
+        entity: 'payment_submissions',
+        entity_id: submission.submission_id,
+        details: {
+          customer_id: submission.customer_id,
+          customer_name: customerName,
+          bill_id: submission.bill_id,
+          file_id: fileId,
+          status: status,
+          reviewed_by: req.user?.username || req.user?.first_name || 'System'
+        },
+        ip_address: req.ip || req.connection?.remoteAddress || null
+      });
+      console.log(`✅ Audit log created for payment ${status}: Submission ${submission.submission_id}, Customer: ${customerName}`);
+    } catch (auditError) {
+      console.error('❌ Failed to create audit log for payment approval/rejection:', auditError.message);
+      // Don't fail the request if audit logging fails
     }
     
     res.json({ 
