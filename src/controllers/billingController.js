@@ -210,12 +210,19 @@ exports.createBill = async (req, res) => {
       WHERE b.bill_id = $1
     `, [result.rows[0].bill_id]);
 
-    // Log audit trail
-    await logAudit({
-      user_id: req.user?.id || null,
-      bill_id: result.rows[0].bill_id,
-      action: 'bill_created'
-    });
+    // Get customer name for audit log
+    let customerName = null;
+    try {
+      const customerNameResult = await pool.query(
+        'SELECT first_name, last_name FROM customer_accounts WHERE id = $1',
+        [customer_id]
+      );
+      if (customerNameResult.rows.length > 0) {
+        customerName = `${customerNameResult.rows[0].first_name} ${customerNameResult.rows[0].last_name}`;
+      }
+    } catch (err) {
+      console.warn('Could not fetch customer name for audit log:', err.message);
+    }
 
     // Audit log for bill creation
     try {
@@ -226,13 +233,23 @@ exports.createBill = async (req, res) => {
         entity_id: result.rows[0].bill_id,
         details: {
           customer_id: customer_id,
+          customer_name: customerName,
+          meter_number: meter_number,
+          previous_reading: prevReading,
+          current_reading: currReading,
+          consumption: consumption,
           amount_due: finalAmountDue,
           credit_applied: creditApplied,
-          status: billStatus
+          status: billStatus,
+          due_date: due_date
         },
-        ip_address: req.ip
+        ip_address: req.ip || req.connection?.remoteAddress || null
       });
-    } catch (_) {}
+      console.log(`✅ Audit log created for bill: Bill ${result.rows[0].bill_id}, Customer: ${customerName}, Amount: ₱${finalAmountDue}`);
+    } catch (auditError) {
+      console.error('❌ Failed to create audit log for bill creation:', auditError.message);
+      // Don't fail the request if audit logging fails
+    }
 
     // Prepare response message
     let responseMessage = "Bill created successfully";
