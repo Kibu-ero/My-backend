@@ -101,8 +101,25 @@ const addPayment = async (req, res) => {
     
     // Audit log: Payment processed
     try {
+      // Get user ID from token if available
+      let userId = null;
+      if (req.user?.id) {
+        userId = req.user.id;
+      } else if (req.headers.authorization) {
+        // Try to extract user from token if middleware didn't set req.user
+        try {
+          const jwt = require('jsonwebtoken');
+          const token = req.headers.authorization.replace('Bearer ', '');
+          const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+          userId = decoded.userId || decoded.id;
+        } catch (tokenError) {
+          console.warn('Could not extract user from token:', tokenError.message);
+        }
+      }
+      
       await logAudit({
-        user_id: req.user?.id || null,
+        user_id: userId,
+        bill_id: bill_id,
         action: 'payment_processed',
         entity: 'cashier_billing',
         entity_id: result.rows[0].id || bill_id,
@@ -118,9 +135,10 @@ const addPayment = async (req, res) => {
         },
         ip_address: req.ip || req.connection?.remoteAddress || null
       });
-      console.log(`✅ Audit log created for payment: Bill ${bill_id}, Amount: ₱${amount_paid}`);
+      console.log(`✅ Audit log created for payment: Bill ${bill_id}, Amount: ₱${amount_paid}, User: ${userId || 'N/A'}`);
     } catch (auditError) {
       console.error('❌ Failed to create audit log for payment:', auditError.message);
+      console.error('Stack:', auditError.stack);
       // Don't fail the request if audit logging fails
     }
     
