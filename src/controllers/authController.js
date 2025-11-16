@@ -364,13 +364,18 @@ exports.login = async (req, res) => {
         action: 'login',
         entity: 'system',
         entity_id: null,
-        details: { username: user.rows[0].username, role: user.rows[0].role },
+        details: { 
+          username: user.rows[0].username, 
+          role: user.rows[0].role,
+          email: user.rows[0].email || null
+        },
         ip_address: req.ip || req.connection?.remoteAddress || null
       });
-      console.log("✅ Audit logged for login");
+      console.log(`✅ Audit logged for login: User ${user.rows[0].id} (${user.rows[0].username})`);
     } catch (auditError) {
       // Log audit error but don't fail login
       console.error("⚠️ Audit log failed (non-critical):", auditError.message);
+      console.error("⚠️ Audit log error stack:", auditError.stack);
     }
 
     res.json({
