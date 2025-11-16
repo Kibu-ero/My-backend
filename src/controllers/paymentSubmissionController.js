@@ -88,18 +88,43 @@ const submitPaymentProof = async (req, res) => {
       ]
     );
 
-    // Audit log
+    // Get customer name for audit log
+    let customerName = null;
+    try {
+      const customerResult = await db.query(
+        'SELECT first_name, last_name FROM customer_accounts WHERE id = $1',
+        [parsedCustomerId]
+      );
+      if (customerResult.rows.length > 0) {
+        customerName = `${customerResult.rows[0].first_name} ${customerResult.rows[0].last_name}`;
+      }
+    } catch (err) {
+      console.warn('Could not fetch customer name for audit log:', err.message);
+    }
+
+    // Audit log: Payment submission
     try {
       const { logAudit } = require('../../utils/auditLogger');
       await logAudit({
-        user_id: req.user?.id || null,
+        user_id: parsedCustomerId, // Customer submitting the payment
         action: 'payment_submitted',
         entity: 'payment_submissions',
         entity_id: parsedBillId,
-        details: { customer_id: parsedCustomerId, amount, payment_method: paymentMethod, reference_number: referenceNumber },
-        ip_address: req.ip
+        details: {
+          customer_id: parsedCustomerId,
+          customer_name: customerName,
+          bill_id: parsedBillId,
+          amount: amount,
+          payment_method: paymentMethod,
+          reference_number: referenceNumber || null
+        },
+        ip_address: req.ip || req.connection?.remoteAddress || null
       });
-    } catch (_) {}
+      console.log(`✅ Audit log created for payment submission: Bill ${parsedBillId}, Customer: ${customerName}, Amount: ₱${amount}`);
+    } catch (auditError) {
+      console.error('❌ Failed to create audit log for payment submission:', auditError.message);
+      // Don't fail the request if audit logging fails
+    }
 
     console.log('Payment proof submitted successfully:', { billId, customerId });
     res.status(201).json({
