@@ -107,6 +107,7 @@ const submitPaymentProof = async (req, res) => {
       const { logAudit } = require('../../utils/auditLogger');
       await logAudit({
         user_id: parsedCustomerId, // Customer submitting the payment
+        bill_id: parsedBillId,
         action: 'payment_submitted',
         entity: 'payment_submissions',
         entity_id: parsedBillId,
@@ -123,6 +124,7 @@ const submitPaymentProof = async (req, res) => {
       console.log(`✅ Audit log created for payment submission: Bill ${parsedBillId}, Customer: ${customerName}, Amount: ₱${amount}`);
     } catch (auditError) {
       console.error('❌ Failed to create audit log for payment submission:', auditError.message);
+      console.error('Stack:', auditError.stack);
       // Don't fail the request if audit logging fails
     }
 
