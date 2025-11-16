@@ -265,31 +265,51 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { username, password } = req.body;
-    console.log("Login attempt:", username);
+    
+    if (!username || !password) {
+      return res.status(400).json({ message: "Username and password are required." });
+    }
+    
+    console.log("🔐 Login attempt for username:", username);
 
     let user;
     // Try customer_accounts
-    user = await pool.query(
-      "SELECT id, username, email, password, 'customer' AS role, first_name, last_name, status FROM customer_accounts WHERE username = $1",
-      [username]
-    );
-    console.log("Checked customer_accounts:", user.rows.length);
+    try {
+      user = await pool.query(
+        "SELECT id, username, email, password, 'customer' AS role, first_name, last_name, status FROM customer_accounts WHERE username = $1",
+        [username]
+      );
+      console.log("✅ Checked customer_accounts:", user.rows.length);
+    } catch (dbError) {
+      console.error("❌ Database error checking customer_accounts:", dbError.message);
+      throw dbError;
+    }
 
     if (user.rows.length === 0) {
       // Try users (admin/cashier)
-      user = await pool.query(
-        "SELECT id, username, email, password, role, name AS first_name, '' AS last_name FROM users WHERE username = $1",
-        [username]
-      );
-      console.log("Checked users:", user.rows.length);
+      try {
+        user = await pool.query(
+          "SELECT id, username, email, password, role, name AS first_name, '' AS last_name FROM users WHERE username = $1",
+          [username]
+        );
+        console.log("✅ Checked users table:", user.rows.length);
+      } catch (dbError) {
+        console.error("❌ Database error checking users:", dbError.message);
+        throw dbError;
+      }
     }
     if (user.rows.length === 0) {
       // Try employees
-      user = await pool.query(
-        "SELECT id, username, email, password, role, first_name, last_name FROM employees WHERE username = $1",
-        [username]
-      );
-      console.log("Checked employees:", user.rows.length);
+      try {
+        user = await pool.query(
+          "SELECT id, username, email, password, role, first_name, last_name FROM employees WHERE username = $1",
+          [username]
+        );
+        console.log("✅ Checked employees table:", user.rows.length);
+      } catch (dbError) {
+        console.error("❌ Database error checking employees:", dbError.message);
+        throw dbError;
+      }
     }
     if (user.rows.length === 0) {
       console.log("No user found for username:", username);
@@ -310,28 +330,48 @@ exports.login = async (req, res) => {
     }
 
     // Validate password
+    if (!user.rows[0].password) {
+      console.error("❌ User has no password set");
+      return res.status(400).json({ message: "Invalid username or password." });
+    }
+    
     const validPassword = await bcrypt.compare(password, user.rows[0].password);
-    console.log("Password valid:", validPassword);
+    console.log("✅ Password validation result:", validPassword);
 
     if (!validPassword) {
       return res.status(400).json({ message: "Invalid username or password." });
     }
 
     // Generate JWT Token
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      console.error("❌ JWT_SECRET is not set in environment variables");
+      return res.status(500).json({ message: "Server configuration error. Please contact support." });
+    }
+    
     const token = jwt.sign(
       { id: user.rows[0].id, username: user.rows[0].username, email: user.rows[0].email, role: user.rows[0].role },
-      process.env.JWT_SECRET,
+      jwtSecret,
       { expiresIn: "1d" }
     );
-    console.log("JWT generated");
+    console.log("✅ JWT generated successfully");
 
     // Log audit trail for successful login
-    await logAudit({
-      user_id: user.rows[0].id,
-      bill_id: null,
-      action: 'login'
-    });
-    console.log("Audit logged");
+    try {
+      await logAudit({
+        user_id: user.rows[0].id,
+        bill_id: null,
+        action: 'login',
+        entity: 'system',
+        entity_id: null,
+        details: { username: user.rows[0].username, role: user.rows[0].role },
+        ip_address: req.ip || req.connection?.remoteAddress || null
+      });
+      console.log("✅ Audit logged for login");
+    } catch (auditError) {
+      // Log audit error but don't fail login
+      console.error("⚠️ Audit log failed (non-critical):", auditError.message);
+    }
 
     res.json({
       token,
@@ -344,7 +384,16 @@ exports.login = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Login Error:", error);
-    res.status(500).json({ message: "Internal Server Error" });
+    console.error("❌ Login Error Stack:", error.stack);
+    console.error("❌ Login Error Details:", {
+      message: error.message,
+      code: error.code,
+      name: error.name
+    });
+    res.status(500).json({ 
+      message: "Internal Server Error",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
