@@ -132,8 +132,8 @@ exports.register = async (req, res) => {
       age--;
     }
     
-    if (age < 0 || age > 120) {
-      return res.status(400).json({ message: "Please enter a valid birthdate." });
+    if (age < 18 || age > 120) {
+      return res.status(400).json({ message: "You must be at least 18 years old to register." });
     }
     
     // Determine if user is a senior citizen (60+ years old)
