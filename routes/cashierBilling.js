@@ -47,18 +47,46 @@ router.put('/bills/:billId/status', verifyToken, requireRole('cashier'), async (
       return res.status(404).json({ error: 'Bill not found' });
     }
     
-    // Audit
+    // Get customer info for audit log
+    let customerInfo = null;
     try {
-      const { logAudit } = require('../src/utils/auditLogger');
+      const billResult = await pool.query(
+        'SELECT customer_id FROM billing WHERE bill_id = $1',
+        [billId]
+      );
+      if (billResult.rows.length > 0) {
+        const customerResult = await pool.query(
+          'SELECT first_name, last_name FROM customer_accounts WHERE id = $1',
+          [billResult.rows[0].customer_id]
+        );
+        if (customerResult.rows.length > 0) {
+          customerInfo = `${customerResult.rows[0].first_name} ${customerResult.rows[0].last_name}`;
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch customer info for audit log:', err.message);
+    }
+    
+    // Audit log
+    try {
+      const { logAudit } = require('../utils/auditLogger');
       await logAudit({
         user_id: req.user?.id || null,
         action: status === 'Paid' ? 'payment_approved' : status === 'Rejected' ? 'payment_rejected' : 'bill_status_updated',
         entity: 'billing',
         entity_id: billId,
-        details: { status },
-        ip_address: req.ip
+        details: {
+          status: status,
+          customer_name: customerInfo,
+          reviewed_by: req.user?.username || req.user?.first_name || 'System'
+        },
+        ip_address: req.ip || req.connection?.remoteAddress || null
       });
-    } catch (_) {}
+      console.log(`✅ Audit log created for bill status update: Bill ${billId}, Status: ${status}, Customer: ${customerInfo}`);
+    } catch (auditError) {
+      console.error('❌ Failed to create audit log:', auditError.message);
+      // Don't fail the request if audit logging fails
+    }
 
     res.json({ success: true, bill: result.rows[0] });
   } catch (error) {
