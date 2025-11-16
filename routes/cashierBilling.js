@@ -5,7 +5,7 @@ const pool = require('../db');
 const router = express.Router();
 
 // Payment routes
-router.post('/add', addPayment);
+router.post('/add', verifyToken, addPayment);
 router.get('/all', fetchPayments);
 router.get('/unpaid', fetchUnpaidBills);
 router.get('/customer/:customerId', fetchPaymentsByCustomer);
@@ -72,6 +72,7 @@ router.put('/bills/:billId/status', verifyToken, requireRole('cashier'), async (
       const { logAudit } = require('../utils/auditLogger');
       await logAudit({
         user_id: req.user?.id || null,
+        bill_id: billId,
         action: status === 'Paid' ? 'payment_approved' : status === 'Rejected' ? 'payment_rejected' : 'bill_status_updated',
         entity: 'billing',
         entity_id: billId,
