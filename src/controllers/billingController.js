@@ -228,6 +228,7 @@ exports.createBill = async (req, res) => {
     try {
       await logAudit({
         user_id: req.user?.id || null,
+        bill_id: result.rows[0].bill_id,
         action: 'bill_created',
         entity: 'billing',
         entity_id: result.rows[0].bill_id,
@@ -248,6 +249,7 @@ exports.createBill = async (req, res) => {
       console.log(`✅ Audit log created for bill: Bill ${result.rows[0].bill_id}, Customer: ${customerName}, Amount: ₱${finalAmountDue}`);
     } catch (auditError) {
       console.error('❌ Failed to create audit log for bill creation:', auditError.message);
+      console.error('Stack:', auditError.stack);
       // Don't fail the request if audit logging fails
     }
 
