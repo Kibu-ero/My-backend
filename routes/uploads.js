@@ -217,6 +217,7 @@ router.put('/file/:fileId/status', verifyToken, requireRole('admin', 'cashier'),
       const { logAudit } = require('../utils/auditLogger');
       await logAudit({
         user_id: req.user?.id || null,
+        bill_id: submission.bill_id || null,
         action: status === 'approved' ? 'payment_approved' : 'payment_rejected',
         entity: 'payment_submissions',
         entity_id: submission.submission_id,
