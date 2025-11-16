@@ -1,4 +1,5 @@
 const db = require('../../db');
+const { logAudit } = require('../../utils/auditLogger');
 
 // Add Payment
 const addPayment = async (req, res) => {
@@ -72,6 +73,20 @@ const addPayment = async (req, res) => {
 
     const result = await db.query(query, values);
     
+    // Get customer info for audit log
+    let customerInfo = null;
+    try {
+      const customerResult = await db.query(
+        'SELECT first_name, last_name FROM customer_accounts WHERE id = $1',
+        [customer_id]
+      );
+      if (customerResult.rows.length > 0) {
+        customerInfo = `${customerResult.rows[0].first_name} ${customerResult.rows[0].last_name}`;
+      }
+    } catch (err) {
+      console.warn('Could not fetch customer info for audit log:', err.message);
+    }
+    
     // Update the billing status to paid in the billing table
     try {
       await db.query(
@@ -82,6 +97,31 @@ const addPayment = async (req, res) => {
     } catch (updateError) {
       console.error('Warning: Could not update billing status:', updateError.message);
       // Continue with the response, since the payment was recorded
+    }
+    
+    // Audit log: Payment processed
+    try {
+      await logAudit({
+        user_id: req.user?.id || null,
+        action: 'payment_processed',
+        entity: 'cashier_billing',
+        entity_id: result.rows[0].id || bill_id,
+        details: {
+          bill_id: bill_id,
+          customer_id: customer_id,
+          customer_name: customerInfo,
+          amount_paid: parseFloat(amount_paid),
+          penalty_paid: parseFloat(penalty_paid || 0),
+          payment_method: payment_method || 'Cash',
+          receipt_number: receipt_number,
+          total_amount: parseFloat(amount_paid) + parseFloat(penalty_paid || 0)
+        },
+        ip_address: req.ip || req.connection?.remoteAddress || null
+      });
+      console.log(`✅ Audit log created for payment: Bill ${bill_id}, Amount: ₱${amount_paid}`);
+    } catch (auditError) {
+      console.error('❌ Failed to create audit log for payment:', auditError.message);
+      // Don't fail the request if audit logging fails
     }
     
     res.status(201).json({ success: true, payment: result.rows[0] });
@@ -203,11 +243,43 @@ const updateBillStatus = async (req, res) => {
       return res.status(404).json({ error: 'Bill not found' });
     }
     
-    // Insert audit log
-    await db.query(
-      `INSERT INTO audit_logs (bill_id, user_id, action, timestamp) VALUES ($1, $2, $3, NOW())`,
-      [billId, userId, status]
-    );
+    // Get customer info for audit log
+    let customerInfo = null;
+    try {
+      const billResult = await db.query(
+        'SELECT customer_id FROM billing WHERE bill_id = $1',
+        [billId]
+      );
+      if (billResult.rows.length > 0) {
+        const customerResult = await db.query(
+          'SELECT first_name, last_name FROM customer_accounts WHERE id = $1',
+          [billResult.rows[0].customer_id]
+        );
+        if (customerResult.rows.length > 0) {
+          customerInfo = `${customerResult.rows[0].first_name} ${customerResult.rows[0].last_name}`;
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch customer info for audit log:', err.message);
+    }
+    
+    // Audit log using logAudit function
+    try {
+      await logAudit({
+        user_id: userId,
+        action: status === 'Paid' ? 'payment_approved' : status === 'Rejected' ? 'payment_rejected' : 'bill_status_updated',
+        entity: 'billing',
+        entity_id: billId,
+        details: {
+          status: status,
+          customer_name: customerInfo
+        },
+        ip_address: req.ip || req.connection?.remoteAddress || null
+      });
+    } catch (auditError) {
+      console.error('❌ Failed to create audit log:', auditError.message);
+      // Don't fail the request if audit logging fails
+    }
     
     res.json({ success: true, bill: result.rows[0] });
   } catch (error) {
