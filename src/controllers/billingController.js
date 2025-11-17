@@ -29,22 +29,32 @@ exports.createBill = async (req, res) => {
     try {
       const isEncoder = req.user?.role === 'encoder' || req.user?.role === 'Encoder';
       if (isEncoder) {
-        // Use due_date month to determine billing month
+        // Check if a bill already exists for this customer in the current month
+        // We check based on the billing month (created_at) to ensure only one bill per month
+        const currentDate = new Date();
+        const currentYear = currentDate.getFullYear();
+        const currentMonth = currentDate.getMonth() + 1; // JavaScript months are 0-indexed
+        
         const checkResult = await pool.query(
           `SELECT 1
            FROM billing
            WHERE customer_id = $1
-             AND date_trunc('month', due_date::timestamp) = date_trunc('month', $2::timestamp)
+             AND EXTRACT(YEAR FROM created_at) = $2
+             AND EXTRACT(MONTH FROM created_at) = $3
+             AND status != 'Cancelled'
            LIMIT 1`,
-          [customer_id, due_date]
+          [customer_id, currentYear, currentMonth]
         );
         if (checkResult.rows.length > 0) {
           return res.status(409).json({
-            message: 'Only one bill per customer is allowed per month for encoders.'
+            message: 'Only one bill per customer is allowed per month. A bill for this customer already exists for the current month.'
           });
         }
       }
-    } catch (_) {}
+    } catch (error) {
+      console.error('Error checking encoder bill limit:', error);
+      // Don't block the request if there's an error checking, but log it
+    }
 
     // 5. Calculate water consumption
     const consumption = currReading - prevReading;
