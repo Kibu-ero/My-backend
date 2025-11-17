@@ -11,8 +11,8 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 const pool = require('../db');
 const router = express.Router();
 
-// ✅ Create a new bill
-router.post("/", createBill);
+// ✅ Create a new bill (requires authentication)
+router.post("/", verifyToken, createBill);
 
 // ✅ Get all bills
 router.get("/", getAllBills);
