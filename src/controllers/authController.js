@@ -358,7 +358,7 @@ exports.login = async (req, res) => {
 
     // Log audit trail for successful login
     try {
-      await logAudit({
+      const auditResult = await logAudit({
         user_id: user.rows[0].id,
         bill_id: null,
         action: 'login',
@@ -372,10 +372,16 @@ exports.login = async (req, res) => {
         ip_address: req.ip || req.connection?.remoteAddress || null
       });
       console.log(`✅ Audit logged for login: User ${user.rows[0].id} (${user.rows[0].username})`);
+      console.log(`✅ Audit log result:`, auditResult ? 'Success' : 'No result');
     } catch (auditError) {
       // Log audit error but don't fail login
       console.error("⚠️ Audit log failed (non-critical):", auditError.message);
       console.error("⚠️ Audit log error stack:", auditError.stack);
+      console.error("⚠️ Audit log error details:", {
+        user_id: user.rows[0].id,
+        username: user.rows[0].username,
+        error_code: auditError.code
+      });
     }
 
     res.json({
