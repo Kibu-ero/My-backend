@@ -8,7 +8,7 @@ router.get('/', async (req, res) => {
   const { user_id, action, bill_id, start, end } = req.query;
   
   // Build query with LEFT JOINs to get username from different tables
-  // Also extract username from details JSON as fallback
+  // Also extract username from details JSONB as fallback
   let query = `
     SELECT 
       al.*,
@@ -16,21 +16,13 @@ router.get('/', async (req, res) => {
         ca.username,
         u.username,
         e.username,
-        NULLIF(
-          CASE 
-            WHEN al.details IS NOT NULL 
-              AND al.details::text != 'null' 
-              AND al.details::text != ''
-            THEN 
-              CASE 
-                WHEN jsonb_typeof(COALESCE(al.details::jsonb, '{}'::jsonb)) = 'object'
-                THEN (al.details::jsonb->>'username')
-                ELSE NULL
-              END
-            ELSE NULL
-          END,
-          ''
-        )
+        CASE 
+          WHEN al.details IS NOT NULL 
+            AND jsonb_typeof(al.details) = 'object'
+            AND al.details ? 'username'
+          THEN al.details->>'username'
+          ELSE NULL
+        END
       ) as username
     FROM audit_logs al
     LEFT JOIN customer_accounts ca ON al.user_id = ca.id
