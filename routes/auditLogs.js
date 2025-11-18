@@ -37,6 +37,12 @@ router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(query, params);
     console.log(`✅ Returning ${rows.length} audit log entries`);
+    
+    // Log the most recent entry timestamp for debugging
+    if (rows.length > 0) {
+      console.log(`📅 Most recent entry: ${rows[0].timestamp} (action: ${rows[0].action}, user_id: ${rows[0].user_id})`);
+    }
+    
     res.json(rows);
   } catch (error) {
     console.error('❌ Error fetching audit logs:', error);
