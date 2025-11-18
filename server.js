@@ -69,6 +69,33 @@ const penaltyRoutes = require('./src/routes/penalties');
 const creditRoutes = require('./src/routes/credits');
 // const settingsRoutes = require('./routes/settings');
 
+// Validate that all routes are actually routers (routers are objects with methods like use, get, post, etc.)
+const routes = [
+  { name: 'paymentSubmissionRoutes', route: paymentSubmissionRoutes },
+  { name: 'cashierBillingRoutes', route: cashierBillingRoutes },
+  { name: 'authRoutes', route: authRoutes },
+  { name: 'billingRoutes', route: billingRoutes },
+  { name: 'employeeRoutes', route: employeeRoutes },
+  { name: 'customerRoutes', route: customerRoutes },
+  { name: 'paymentRoutes', route: paymentRoutes },
+  { name: 'billRoutes', route: billRoutes },
+  { name: 'uploadRoutes', route: uploadRoutes },
+  { name: 'reportRoutes', route: reportRoutes },
+  { name: 'dashboardRoutes', route: dashboardRoutes },
+  { name: 'archiveBillingRouter', route: archiveBillingRouter },
+  { name: 'auditLogsRoutes', route: auditLogsRoutes },
+  { name: 'otpRoutes', route: otpRoutes },
+  { name: 'penaltyRoutes', route: penaltyRoutes },
+  { name: 'creditRoutes', route: creditRoutes },
+];
+
+routes.forEach(({ name, route }) => {
+  if (!route || typeof route !== 'object' || typeof route.use !== 'function') {
+    console.error(`❌ ${name} is not a valid router. Type: ${typeof route}, Value:`, route);
+    throw new Error(`${name} is not a valid Express router`);
+  }
+});
+
 // Initialize automatic penalty processing
 const { schedulePenaltyProcessing } = require('./src/utils/scheduler');
 schedulePenaltyProcessing();
