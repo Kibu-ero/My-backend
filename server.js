@@ -4,7 +4,8 @@ const path = require('path');
 require("dotenv").config({ path: path.join(__dirname, '.env') });
 
 const app = express();
-
+// const settingsRoutes = require('./routes/settings');
+// app.use('/api/settings', settingsRoutes);
 // CORS configuration
 const rawOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || "http://localhost:3000";
 const allowedOrigins = rawOrigins.split(",").map((o) => o.trim());
@@ -66,7 +67,7 @@ const auditLogsRoutes = require('./routes/auditLogs');
 const { router: otpRoutes } = require('./routes/otp');
 const penaltyRoutes = require('./src/routes/penalties');
 const creditRoutes = require('./src/routes/credits');
-const settingsRoutes = require('./routes/settings');
+// const settingsRoutes = require('./routes/settings');
 
 // Initialize automatic penalty processing
 const { schedulePenaltyProcessing } = require('./src/utils/scheduler');
@@ -84,21 +85,16 @@ app.use("/api/bills", billRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use(archiveBillingRouter);
+app.use('/api', archiveBillingRouter);
 app.use('/api/audit-logs', auditLogsRoutes);
 app.use('/api/otp', otpRoutes);
 app.use('/api/penalties', penaltyRoutes);
 app.use('/api/credits', creditRoutes);
-app.use('/api/settings', settingsRoutes);
+// app.use('/api/settings', settingsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// API health (useful for Vercel /api rewrite testing)
-app.get('/api/healthz', (req, res) => {
-  res.json({ status: 'ok', path: '/api/healthz', timestamp: new Date().toISOString() });
 });
 
 // Error handling
