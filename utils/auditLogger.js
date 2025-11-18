@@ -21,9 +21,11 @@ async function logAudit({ user_id = null, bill_id = null, action, entity = null,
   
   try {
     const result = await pool.query(text, values);
-    console.log(`✅ Audit log inserted: ${action}`, { user_id, bill_id, entity, entity_id });
+    console.log(`✅ Audit log inserted: ${action}`, { user_id, bill_id, entity, entity_id, timestamp: new Date().toISOString() });
+    console.log(`✅ Audit log row count:`, result.rowCount);
     return result;
   } catch (e) {
+    console.error(`❌ First attempt failed for ${action}:`, e.message);
     // If details column doesn't exist, try without it
     if (e.message && (e.message.includes('column "details"') || e.message.includes('column "bill_id"') || e.code === '42703')) {
       console.warn('⚠️ Some columns not found, trying fallback queries');
@@ -36,7 +38,8 @@ async function logAudit({ user_id = null, bill_id = null, action, entity = null,
         `;
         values = [user_id, bill_id, action, entity, entity_id, ip_address];
         const result = await pool.query(text, values);
-        console.log(`✅ Audit log inserted (without details): ${action}`, { user_id, bill_id, entity, entity_id });
+        console.log(`✅ Audit log inserted (without details): ${action}`, { user_id, bill_id, entity, entity_id, timestamp: new Date().toISOString() });
+        console.log(`✅ Audit log row count:`, result.rowCount);
         return result;
       } catch (e2) {
         // Try without both details and bill_id
@@ -48,7 +51,8 @@ async function logAudit({ user_id = null, bill_id = null, action, entity = null,
             `;
             values = [user_id, action, entity, entity_id, ip_address];
             const result = await pool.query(text, values);
-            console.log(`✅ Audit log inserted (minimal): ${action}`, { user_id, entity, entity_id });
+            console.log(`✅ Audit log inserted (minimal): ${action}`, { user_id, entity, entity_id, timestamp: new Date().toISOString() });
+            console.log(`✅ Audit log row count:`, result.rowCount);
             return result;
           } catch (fallbackError) {
             console.error('❌ Audit log insert failed (all fallbacks failed):', fallbackError.message);
