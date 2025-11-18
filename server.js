@@ -90,7 +90,8 @@ const routes = [
 ];
 
 routes.forEach(({ name, route }) => {
-  if (!route || typeof route !== 'object' || typeof route.use !== 'function') {
+  // Express routers are functions (callable) that also have methods like use, get, post, etc.
+  if (!route || (typeof route !== 'function' && typeof route !== 'object') || typeof route.use !== 'function') {
     console.error(`❌ ${name} is not a valid router. Type: ${typeof route}, Value:`, route);
     throw new Error(`${name} is not a valid Express router`);
   }
