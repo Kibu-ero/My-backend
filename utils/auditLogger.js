@@ -12,7 +12,7 @@ const pool = require('../db');
  * @param {string} [params.ip_address]
  */
 async function logAudit({ user_id = null, bill_id = null, action, entity = null, entity_id = null, details = null, ip_address = null }) {
-  // Try with bill_id first (new schema)
+  // Try with all columns first (new schema)
   let text = `
     INSERT INTO audit_logs (user_id, bill_id, action, entity, entity_id, details, ip_address, timestamp)
     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
@@ -24,22 +24,40 @@ async function logAudit({ user_id = null, bill_id = null, action, entity = null,
     console.log(`✅ Audit log inserted: ${action}`, { user_id, bill_id, entity, entity_id });
     return result;
   } catch (e) {
-    // If bill_id column doesn't exist, try without it (fallback for old schema)
-    if (e.message && (e.message.includes('column "bill_id"') || e.code === '42703')) {
-      console.warn('⚠️ bill_id column not found, using fallback query');
-      text = `
-        INSERT INTO audit_logs (user_id, action, entity, entity_id, details, ip_address, timestamp)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW())
-      `;
-      values = [user_id, action, entity, entity_id, details ? JSON.stringify(details) : null, ip_address];
+    // If details column doesn't exist, try without it
+    if (e.message && (e.message.includes('column "details"') || e.message.includes('column "bill_id"') || e.code === '42703')) {
+      console.warn('⚠️ Some columns not found, trying fallback queries');
       
+      // Try without details but with bill_id
       try {
+        text = `
+          INSERT INTO audit_logs (user_id, bill_id, action, entity, entity_id, ip_address, timestamp)
+          VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        `;
+        values = [user_id, bill_id, action, entity, entity_id, ip_address];
         const result = await pool.query(text, values);
-        console.log(`✅ Audit log inserted (fallback): ${action}`, { user_id, entity, entity_id });
+        console.log(`✅ Audit log inserted (without details): ${action}`, { user_id, bill_id, entity, entity_id });
         return result;
-      } catch (fallbackError) {
-        console.error('❌ Audit log insert failed (fallback also failed):', fallbackError.message);
-        throw fallbackError;
+      } catch (e2) {
+        // Try without both details and bill_id
+        if (e2.message && (e2.message.includes('column "bill_id"') || e2.code === '42703')) {
+          try {
+            text = `
+              INSERT INTO audit_logs (user_id, action, entity, entity_id, ip_address, timestamp)
+              VALUES ($1, $2, $3, $4, $5, NOW())
+            `;
+            values = [user_id, action, entity, entity_id, ip_address];
+            const result = await pool.query(text, values);
+            console.log(`✅ Audit log inserted (minimal): ${action}`, { user_id, entity, entity_id });
+            return result;
+          } catch (fallbackError) {
+            console.error('❌ Audit log insert failed (all fallbacks failed):', fallbackError.message);
+            throw fallbackError;
+          }
+        } else {
+          console.error('❌ Audit log insert failed (fallback):', e2.message);
+          throw e2;
+        }
       }
     } else {
       console.error('❌ Audit log insert failed:', e.message);
