@@ -12,64 +12,86 @@ const pool = require('../db');
  * @param {string} [params.ip_address]
  */
 async function logAudit({ user_id = null, bill_id = null, action, entity = null, entity_id = null, details = null, ip_address = null }) {
-  // Try with all columns first (new schema)
-  let text = `
-    INSERT INTO audit_logs (user_id, bill_id, action, entity, entity_id, details, ip_address, timestamp)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-  `;
-  let values = [user_id, bill_id, action, entity, entity_id, details ? JSON.stringify(details) : null, ip_address];
+  // Try multiple fallback strategies based on what columns exist
+  // For JSONB columns, PostgreSQL accepts JSON strings or objects directly
+  const detailsValue = details ? (typeof details === 'string' ? details : JSON.stringify(details)) : null;
   
-  try {
-    const result = await pool.query(text, values);
-    console.log(`✅ Audit log inserted: ${action}`, { user_id, bill_id, entity, entity_id, timestamp: new Date().toISOString() });
-    console.log(`✅ Audit log row count:`, result.rowCount);
-    return result;
-  } catch (e) {
-    console.error(`❌ First attempt failed for ${action}:`, e.message);
-    // If details column doesn't exist, try without it
-    if (e.message && (e.message.includes('column "details"') || e.message.includes('column "bill_id"') || e.code === '42703')) {
-      console.warn('⚠️ Some columns not found, trying fallback queries');
-      
-      // Try without details but with bill_id
-      try {
-        text = `
-          INSERT INTO audit_logs (user_id, bill_id, action, entity, entity_id, ip_address, timestamp)
-          VALUES ($1, $2, $3, $4, $5, $6, NOW())
-        `;
-        values = [user_id, bill_id, action, entity, entity_id, ip_address];
-        const result = await pool.query(text, values);
-        console.log(`✅ Audit log inserted (without details): ${action}`, { user_id, bill_id, entity, entity_id, timestamp: new Date().toISOString() });
-        console.log(`✅ Audit log row count:`, result.rowCount);
+  const attempts = [
+    // Attempt 1: Full schema with all columns (details as JSONB, ip_address as VARCHAR)
+    {
+      name: 'full schema',
+      text: `INSERT INTO audit_logs (user_id, bill_id, action, entity, entity_id, details, ip_address, timestamp) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NOW()) RETURNING id, timestamp`,
+      values: [user_id, bill_id, action, entity, entity_id, detailsValue, ip_address]
+    },
+    // Attempt 2: Without details, but with bill_id and ip_address
+    {
+      name: 'without details',
+      text: `INSERT INTO audit_logs (user_id, bill_id, action, entity, entity_id, ip_address, timestamp) VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id, timestamp`,
+      values: [user_id, bill_id, action, entity, entity_id, ip_address]
+    },
+    // Attempt 3: Without details and ip_address, but with bill_id
+    {
+      name: 'without details and ip_address',
+      text: `INSERT INTO audit_logs (user_id, bill_id, action, entity, entity_id, timestamp) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, timestamp`,
+      values: [user_id, bill_id, action, entity, entity_id]
+    },
+    // Attempt 4: Without bill_id, details, and ip_address
+    {
+      name: 'minimal with entity',
+      text: `INSERT INTO audit_logs (user_id, action, entity, entity_id, timestamp) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, timestamp`,
+      values: [user_id, action, entity, entity_id]
+    },
+    // Attempt 5: Absolute minimal (just user_id, action, timestamp)
+    {
+      name: 'absolute minimal',
+      text: `INSERT INTO audit_logs (user_id, action, timestamp) VALUES ($1, $2, NOW()) RETURNING id, timestamp`,
+      values: [user_id, action]
+    }
+  ];
+
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    try {
+      const result = await pool.query(attempt.text, attempt.values);
+      if (result.rows && result.rows.length > 0) {
+        console.log(`✅ Audit log inserted (${attempt.name}): ${action}`, { 
+          id: result.rows[0].id,
+          user_id, 
+          bill_id, 
+          entity, 
+          entity_id, 
+          timestamp: result.rows[0].timestamp || new Date().toISOString(),
+          action
+        });
         return result;
-      } catch (e2) {
-        // Try without both details and bill_id
-        if (e2.message && (e2.message.includes('column "bill_id"') || e2.code === '42703')) {
-          try {
-            text = `
-              INSERT INTO audit_logs (user_id, action, entity, entity_id, ip_address, timestamp)
-              VALUES ($1, $2, $3, $4, $5, NOW())
-            `;
-            values = [user_id, action, entity, entity_id, ip_address];
-            const result = await pool.query(text, values);
-            console.log(`✅ Audit log inserted (minimal): ${action}`, { user_id, entity, entity_id, timestamp: new Date().toISOString() });
-            console.log(`✅ Audit log row count:`, result.rowCount);
-            return result;
-          } catch (fallbackError) {
-            console.error('❌ Audit log insert failed (all fallbacks failed):', fallbackError.message);
-            throw fallbackError;
-          }
-        } else {
-          console.error('❌ Audit log insert failed (fallback):', e2.message);
-          throw e2;
-        }
+      } else {
+        console.log(`✅ Audit log inserted (${attempt.name}): ${action}`, { 
+          user_id, 
+          bill_id, 
+          entity, 
+          entity_id, 
+          timestamp: new Date().toISOString(),
+          action
+        });
+        return result;
       }
-    } else {
-      console.error('❌ Audit log insert failed:', e.message);
-      console.error('Failed query:', text);
-      console.error('Failed values:', values);
-      throw e;
+    } catch (e) {
+      // If this is the last attempt, log the error but don't throw
+      if (i === attempts.length - 1) {
+        console.error(`❌ Audit log insert failed (all ${attempts.length} attempts failed):`, e.message);
+        console.error(`Last failed query:`, attempt.text);
+        console.error(`Last failed values:`, attempt.values);
+        console.error(`Error code:`, e.code);
+        // Don't throw - just log the error so login doesn't fail
+        return null;
+      }
+      // Otherwise, try the next fallback
+      console.warn(`⚠️ Attempt ${i + 1} (${attempt.name}) failed:`, e.message, `(code: ${e.code})`);
     }
   }
+  
+  // Should never reach here, but just in case
+  return null;
 }
 
 module.exports = { logAudit };
