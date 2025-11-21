@@ -358,6 +358,33 @@ exports.login = async (req, res) => {
 
     // Log audit trail for successful login
     try {
+      // Determine user type based on role
+      const role = user.rows[0].role || '';
+      let userType = role;
+      
+      // Format role for display (capitalize first letter, replace underscores)
+      const formattedRole = role
+        .split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+      
+      // Create a descriptive user type label
+      const userTypeLabels = {
+        'customer': 'Customer',
+        'cashier': 'Cashier',
+        'encoder': 'Encoder',
+        'admin': 'Administrator',
+        'finance_officer': 'Finance Officer',
+        'finance officer': 'Finance Officer'
+      };
+      
+      const displayUserType = userTypeLabels[role.toLowerCase()] || formattedRole || 'User';
+      
+      // Build full name if available
+      const firstName = user.rows[0].first_name || '';
+      const lastName = user.rows[0].last_name || '';
+      const fullName = (firstName + ' ' + lastName).trim() || user.rows[0].username;
+      
       const auditResult = await logAudit({
         user_id: user.rows[0].id,
         bill_id: null,
@@ -365,13 +392,16 @@ exports.login = async (req, res) => {
         entity: 'system',
         entity_id: null,
         details: { 
-          username: user.rows[0].username, 
-          role: user.rows[0].role,
+          username: user.rows[0].username,
+          name: fullName,
+          role: role,
+          user_type: displayUserType,
+          description: `${displayUserType} logged in`,
           email: user.rows[0].email || null
         },
         ip_address: req.ip || req.connection?.remoteAddress || null
       });
-      console.log(`✅ Audit logged for login: User ${user.rows[0].id} (${user.rows[0].username})`);
+      console.log(`✅ Audit logged for login: ${displayUserType} ${user.rows[0].username} (ID: ${user.rows[0].id})`);
       console.log(`✅ Audit log result:`, auditResult ? 'Success' : 'No result');
     } catch (auditError) {
       // Log audit error but don't fail login
