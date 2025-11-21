@@ -5,7 +5,7 @@ const router = express.Router();
 // Get audit logs (optionally filter by user, action, date, bill)
 router.get('/', async (req, res) => {
   console.log("GET /api/audit-logs hit");
-  const { user_id, action, bill_id, start, end } = req.query;
+  const { user_id, name, action, bill_id, start, end } = req.query;
   
   try {
     // First, check which columns exist in audit_logs table
@@ -41,7 +41,7 @@ router.get('/', async (req, res) => {
       selectClause += `, al.ip_address`;
     }
     
-    // Build username and role extraction - get from all possible tables
+    // Build username, role, and full name extraction - get from all possible tables
     // Determine user type based on which table has the user_id match
     let usernameExtraction = `
       COALESCE(
@@ -54,7 +54,17 @@ router.get('/', async (req, res) => {
         WHEN u.id IS NOT NULL THEN COALESCE(u.role, 'user')
         WHEN e.id IS NOT NULL THEN COALESCE(e.role, 'employee')
         ELSE NULL
-      END as user_role
+      END as user_role,
+      CASE
+        WHEN ca.id IS NOT NULL THEN TRIM(
+          COALESCE(ca.first_name, '') || 
+          CASE WHEN ca.middle_name IS NOT NULL AND ca.middle_name != '' THEN ' ' || ca.middle_name ELSE '' END ||
+          ' ' || COALESCE(ca.last_name, '')
+        )
+        WHEN u.id IS NOT NULL THEN TRIM(COALESCE(u.name, ''))
+        WHEN e.id IS NOT NULL THEN TRIM(COALESCE(e.first_name || ' ' || e.last_name, ''))
+        ELSE NULL
+      END as full_name
     `;
     
     if (hasDetails) {
@@ -81,7 +91,24 @@ router.get('/', async (req, res) => {
             THEN al.details->>'role'
             ELSE NULL
           END
-        ) as user_role
+        ) as user_role,
+        COALESCE(
+          CASE
+            WHEN ca.id IS NOT NULL THEN TRIM(
+              COALESCE(ca.first_name, '') || 
+              CASE WHEN ca.middle_name IS NOT NULL AND ca.middle_name != '' THEN ' ' || ca.middle_name ELSE '' END ||
+              ' ' || COALESCE(ca.last_name, '')
+            )
+            WHEN u.id IS NOT NULL THEN TRIM(COALESCE(u.name, ''))
+            WHEN e.id IS NOT NULL THEN TRIM(COALESCE(e.first_name || ' ' || e.last_name, ''))
+            ELSE NULL
+          END,
+          CASE 
+            WHEN al.details IS NOT NULL AND jsonb_typeof(al.details) = 'object' 
+            THEN al.details->>'name'
+            ELSE NULL
+          END
+        ) as full_name
       `;
     }
     
@@ -103,6 +130,18 @@ router.get('/', async (req, res) => {
     if (user_id) { query += ` AND al.user_id = $${idx++}`; params.push(user_id); }
     if (action) { query += ` AND al.action ILIKE $${idx++}`; params.push(`%${action}%`); }
     if (bill_id) { query += ` AND al.bill_id = $${idx++}`; params.push(bill_id); }
+    if (name) { 
+      query += ` AND (
+        CASE
+          WHEN ca.id IS NOT NULL THEN (ca.first_name || ' ' || COALESCE(ca.middle_name || '', '') || ' ' || ca.last_name) ILIKE $${idx}
+          WHEN u.id IS NOT NULL THEN u.name ILIKE $${idx}
+          WHEN e.id IS NOT NULL THEN (e.first_name || ' ' || e.last_name) ILIKE $${idx}
+          ELSE NULL
+        END
+      )`;
+      params.push(`%${name}%`);
+      idx++;
+    }
     if (start) { query += ` AND al.timestamp >= $${idx++}`; params.push(start); }
     if (end) { query += ` AND al.timestamp <= $${idx++}`; params.push(end); }
 
