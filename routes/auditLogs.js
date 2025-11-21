@@ -41,13 +41,20 @@ router.get('/', async (req, res) => {
       selectClause += `, al.ip_address`;
     }
     
-    // Build username extraction - only use details if column exists
+    // Build username and role extraction - get from all possible tables
+    // Determine user type based on which table has the user_id match
     let usernameExtraction = `
       COALESCE(
         ca.username,
         u.username,
         e.username
-      ) as username
+      ) as username,
+      CASE
+        WHEN ca.id IS NOT NULL THEN 'customer'
+        WHEN u.id IS NOT NULL THEN COALESCE(u.role, 'user')
+        WHEN e.id IS NOT NULL THEN COALESCE(e.role, 'employee')
+        ELSE NULL
+      END as user_role
     `;
     
     if (hasDetails) {
@@ -61,7 +68,20 @@ router.get('/', async (req, res) => {
             THEN al.details->>'username'
             ELSE NULL
           END
-        ) as username
+        ) as username,
+        COALESCE(
+          CASE
+            WHEN ca.id IS NOT NULL THEN 'customer'
+            WHEN u.id IS NOT NULL THEN u.role
+            WHEN e.id IS NOT NULL THEN e.role
+            ELSE NULL
+          END,
+          CASE 
+            WHEN al.details IS NOT NULL AND jsonb_typeof(al.details) = 'object' 
+            THEN al.details->>'role'
+            ELSE NULL
+          END
+        ) as user_role
       `;
     }
     
