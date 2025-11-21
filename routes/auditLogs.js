@@ -7,48 +7,88 @@ router.get('/', async (req, res) => {
   console.log("GET /api/audit-logs hit");
   const { user_id, action, bill_id, start, end } = req.query;
   
-  // Build query with LEFT JOINs to get username from different tables
-  // Also extract username from details JSONB if available
-  let query = `
-    SELECT 
+  try {
+    // First, check which columns exist in audit_logs table
+    const columnCheck = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'audit_logs' 
+      AND table_schema = 'public'
+    `);
+    
+    const availableColumns = columnCheck.rows.map(r => r.column_name);
+    const hasDetails = availableColumns.includes('details');
+    const hasIpAddress = availableColumns.includes('ip_address');
+    
+    console.log(`📋 Available columns in audit_logs:`, availableColumns.join(', '));
+    
+    // Build SELECT clause based on available columns
+    let selectClause = `
       al.id,
       al.user_id,
       al.bill_id,
       al.action,
       al.entity,
       al.entity_id,
-      al.details,
-      al.ip_address,
-      al.timestamp,
+      al.timestamp
+    `;
+    
+    // Add optional columns only if they exist
+    if (hasDetails) {
+      selectClause += `, al.details`;
+    }
+    if (hasIpAddress) {
+      selectClause += `, al.ip_address`;
+    }
+    
+    // Build username extraction - only use details if column exists
+    let usernameExtraction = `
       COALESCE(
         ca.username,
         u.username,
-        e.username,
-        CASE 
-          WHEN al.details IS NOT NULL AND jsonb_typeof(al.details) = 'object' 
-          THEN al.details->>'username'
-          ELSE NULL
-        END
+        e.username
       ) as username
-    FROM audit_logs al
-    LEFT JOIN customer_accounts ca ON al.user_id = ca.id
-    LEFT JOIN users u ON al.user_id = u.id
-    LEFT JOIN employees e ON al.user_id = e.id
-    WHERE 1=1
-  `;
-  const params = [];
-  let idx = 1;
+    `;
+    
+    if (hasDetails) {
+      usernameExtraction = `
+        COALESCE(
+          ca.username,
+          u.username,
+          e.username,
+          CASE 
+            WHEN al.details IS NOT NULL AND jsonb_typeof(al.details) = 'object' 
+            THEN al.details->>'username'
+            ELSE NULL
+          END
+        ) as username
+      `;
+    }
+    
+    // Build query with LEFT JOINs to get username from different tables
+    let query = `
+      SELECT 
+        ${selectClause},
+        ${usernameExtraction}
+      FROM audit_logs al
+      LEFT JOIN customer_accounts ca ON al.user_id = ca.id
+      LEFT JOIN users u ON al.user_id = u.id
+      LEFT JOIN employees e ON al.user_id = e.id
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    let idx = 1;
 
-  if (user_id) { query += ` AND al.user_id = $${idx++}`; params.push(user_id); }
-  if (action) { query += ` AND al.action ILIKE $${idx++}`; params.push(`%${action}%`); }
-  if (bill_id) { query += ` AND al.bill_id = $${idx++}`; params.push(bill_id); }
-  if (start) { query += ` AND al.timestamp >= $${idx++}`; params.push(start); }
-  if (end) { query += ` AND al.timestamp <= $${idx++}`; params.push(end); }
+    if (user_id) { query += ` AND al.user_id = $${idx++}`; params.push(user_id); }
+    if (action) { query += ` AND al.action ILIKE $${idx++}`; params.push(`%${action}%`); }
+    if (bill_id) { query += ` AND al.bill_id = $${idx++}`; params.push(bill_id); }
+    if (start) { query += ` AND al.timestamp >= $${idx++}`; params.push(start); }
+    if (end) { query += ` AND al.timestamp <= $${idx++}`; params.push(end); }
 
-  // Increase limit to 500 and ensure we get recent entries
-  query += ' ORDER BY al.timestamp DESC LIMIT 500';
+    // Increase limit to 500 and ensure we get recent entries
+    query += ' ORDER BY al.timestamp DESC LIMIT 500';
 
-  try {
     const { rows } = await pool.query(query, params);
     console.log(`✅ Returning ${rows.length} audit log entries`);
     
