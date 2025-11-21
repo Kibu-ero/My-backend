@@ -381,9 +381,21 @@ exports.login = async (req, res) => {
       const displayUserType = userTypeLabels[role.toLowerCase()] || formattedRole || 'User';
       
       // Build full name if available
-      const firstName = user.rows[0].first_name || '';
-      const lastName = user.rows[0].last_name || '';
-      const fullName = (firstName + ' ' + lastName).trim() || user.rows[0].username;
+      // Handle different table structures:
+      // - customer_accounts: first_name, last_name, middle_name
+      // - users: name (single field)
+      // - employees: first_name, last_name
+      let fullName = '';
+      if (user.rows[0].name) {
+        // users table has single 'name' field
+        fullName = user.rows[0].name;
+      } else {
+        // customer_accounts or employees have first_name and last_name
+        const firstName = user.rows[0].first_name || '';
+        const lastName = user.rows[0].last_name || '';
+        const middleName = user.rows[0].middle_name || '';
+        fullName = [firstName, middleName, lastName].filter(Boolean).join(' ').trim() || user.rows[0].username;
+      }
       
       const auditResult = await logAudit({
         user_id: user.rows[0].id,
@@ -392,12 +404,8 @@ exports.login = async (req, res) => {
         entity: 'system',
         entity_id: null,
         details: { 
-          username: user.rows[0].username,
           name: fullName,
-          role: role,
-          user_type: displayUserType,
-          description: `${displayUserType} logged in`,
-          email: user.rows[0].email || null
+          description: `${displayUserType} logged in`
         },
         ip_address: req.ip || req.connection?.remoteAddress || null
       });
