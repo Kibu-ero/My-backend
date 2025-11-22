@@ -653,7 +653,7 @@ router.get('/revenue', async (req, res) => {
     if (startDate && endDate) {
       query = `
       SELECT 
-          DATE_TRUNC('month', b.billing_date) as month,
+          DATE_TRUNC('month', b.created_at) as month,
           SUM(b.amount_due) as totalRevenue,
           SUM(CASE WHEN b.status = 'Paid' THEN b.amount_due ELSE 0 END) as collectedAmount,
           SUM(b.amount_due) as billedAmount,
@@ -662,16 +662,16 @@ router.get('/revenue', async (req, res) => {
               (SUM(CASE WHEN b.status = 'Paid' THEN b.amount_due ELSE 0 END) / SUM(b.amount_due)) * 100
             ELSE 0
           END as collectionRate
-      FROM bills b
-        WHERE b.billing_date BETWEEN $1 AND $2
-        GROUP BY DATE_TRUNC('month', b.billing_date)
+      FROM billing b
+        WHERE b.created_at BETWEEN $1::timestamp AND $2::timestamp
+        GROUP BY DATE_TRUNC('month', b.created_at)
       ORDER BY month DESC
     `;
       params = [startDate, endDate];
     } else {
       query = `
         SELECT 
-          DATE_TRUNC('month', b.billing_date) as month,
+          DATE_TRUNC('month', b.created_at) as month,
           SUM(b.amount_due) as totalRevenue,
           SUM(CASE WHEN b.status = 'Paid' THEN b.amount_due ELSE 0 END) as collectedAmount,
           SUM(b.amount_due) as billedAmount,
@@ -680,9 +680,9 @@ router.get('/revenue', async (req, res) => {
               (SUM(CASE WHEN b.status = 'Paid' THEN b.amount_due ELSE 0 END) / SUM(b.amount_due)) * 100
             ELSE 0
           END as collectionRate
-        FROM bills b
-        WHERE b.billing_date IS NOT NULL
-        GROUP BY DATE_TRUNC('month', b.billing_date)
+        FROM billing b
+        WHERE b.created_at IS NOT NULL
+        GROUP BY DATE_TRUNC('month', b.created_at)
         ORDER BY month DESC
       `;
     }
@@ -693,7 +693,57 @@ router.get('/revenue', async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching revenue report:', err);
-    res.status(500).json({ message: 'Error fetching revenue report' });
+    res.status(500).json({ message: 'Error fetching revenue report', error: err.message });
+  }
+});
+
+// Monthly Statistics
+router.get('/monthly-stats', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    console.log('Monthly stats report params:', { startDate, endDate });
+    
+    let query;
+    let params = [];
+    
+    if (startDate && endDate) {
+      query = `
+      SELECT 
+          DATE_TRUNC('month', b.created_at) as month,
+        COUNT(DISTINCT b.customer_id) as activeCustomers,
+          SUM(b.amount_due) as totalBilled,
+          SUM(CASE WHEN b.status = 'Paid' THEN b.amount_due ELSE 0 END) as totalCollected,
+          COUNT(CASE WHEN b.status = 'Unpaid' OR b.status IS NULL THEN 1 END) as unpaidBills,
+          AVG(b.amount_due) as averageBillAmount
+      FROM billing b
+        WHERE b.created_at BETWEEN $1::timestamp AND $2::timestamp
+        GROUP BY DATE_TRUNC('month', b.created_at)
+      ORDER BY month DESC
+    `;
+      params = [startDate, endDate];
+    } else {
+      query = `
+        SELECT 
+          DATE_TRUNC('month', b.created_at) as month,
+          COUNT(DISTINCT b.customer_id) as activeCustomers,
+          SUM(b.amount_due) as totalBilled,
+          SUM(CASE WHEN b.status = 'Paid' THEN b.amount_due ELSE 0 END) as totalCollected,
+          COUNT(CASE WHEN b.status = 'Unpaid' OR b.status IS NULL THEN 1 END) as unpaidBills,
+          AVG(b.amount_due) as averageBillAmount
+        FROM billing b
+        WHERE b.created_at IS NOT NULL
+        GROUP BY DATE_TRUNC('month', b.created_at)
+        ORDER BY month DESC
+      `;
+    }
+    
+    console.log('Executing monthly stats query with params:', params);
+    const result = await pool.query(query, params);
+    console.log('Monthly stats result:', result.rows);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching monthly statistics:', err);
+    res.status(500).json({ message: 'Error fetching monthly statistics', error: err.message });
   }
 });
 
@@ -706,10 +756,10 @@ router.get('/billing-sheet-zones', async (req, res) => {
     }
 
     const monthMap = {
-      'JANUARY': 1,'FEBRUARY': 2,'MARCH': 3,'APRIL': 4,'MAY': 5,'JUNE': 6,
-      'JULY': 7,'AUGUST': 8,'SEPTEMBER': 9,'OCTOBER': 10,'NOVEMBER': 11,'DECEMBER': 12
+      'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
+      'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12
     };
-    const m = isNaN(month) ? (monthMap[String(month).toUpperCase()] || 1) : parseInt(month, 10);
+    const m = isNaN(month) ? (monthMap[String(month).toUpperCase()] || parseInt(month, 10)) : parseInt(month, 10);
     const y = parseInt(year, 10);
 
     const query = `
@@ -726,194 +776,7 @@ router.get('/billing-sheet-zones', async (req, res) => {
     res.json(result.rows.map(row => row.zone));
   } catch (err) {
     console.error('Error fetching zones:', err);
-    res.status(500).json({ message: 'Error fetching zones' });
-  }
-});
-
-// Daily Collector Billing Sheet - month/year and optional zone/collector
-router.get('/daily-collector', async (req, res) => {
-  try {
-    const { month, year, collector, zone } = req.query; // month as 1-12 or name, year as 4-digit
-    if (!month || !year) {
-      return res.status(400).json({ error: 'month and year are required' });
-    }
-
-    // Normalize month to number 1-12
-    const monthMap = {
-      'JANUARY': 1,'FEBRUARY': 2,'MARCH': 3,'APRIL': 4,'MAY': 5,'JUNE': 6,
-      'JULY': 7,'AUGUST': 8,'SEPTEMBER': 9,'OCTOBER': 10,'NOVEMBER': 11,'DECEMBER': 12
-    };
-    const m = isNaN(month) ? (monthMap[String(month).toUpperCase()] || 1) : parseInt(month, 10);
-    const y = parseInt(year, 10);
-
-    console.log('Daily collector query params:', { month: m, year: y, collector, zone });
-
-    const params = [m, y];
-    let whereFilter = '';
-    
-    // Support both collector (legacy) and zone parameter
-    const filterValue = zone || collector;
-    
-    // If filter is provided and not 'ALL', add WHERE clause
-    if (filterValue && filterValue.toUpperCase() !== 'ALL' && filterValue !== '') {
-      params.push(filterValue);
-      // Match by barangay or city (no b.zone column in current schema)
-      whereFilter = ' AND (ca.barangay = $3 OR ca.city = $3)';
-    }
-
-    const query = `
-      SELECT 
-        COALESCE(NULLIF(TRIM(ca.barangay), ''), NULLIF(TRIM(ca.city), ''), '') AS zone,
-        COALESCE(ca.first_name || ' ' || ca.last_name, '') AS name,
-        TRIM(BOTH ', ' FROM COALESCE(ca.province,'') || ', ' || COALESCE(ca.city,'') || ', ' || COALESCE(ca.barangay,'')) AS address,
-        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN 'SC' ELSE 'ACTIVE' END AS status1,
-        COALESCE(ca.status,'') AS status2,
-        COALESCE(ca.status,'') AS status2,
-        COALESCE(b.current_reading,0) AS present_reading,
-        COALESCE(b.previous_reading,0) AS previous_reading,
-        COALESCE(b.current_reading,0) - COALESCE(b.previous_reading,0) AS used,
-        COALESCE(b.amount_due,0) AS bill_amount,
-        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END AS scd,
-        GREATEST(COALESCE(b.amount_due,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS total_amount,
-        COALESCE(cb.receipt_number,'') AS or_number,
-        TO_CHAR(COALESCE(cb.payment_date, b.due_date), 'MM-DD') AS pay_date,
-        COALESCE(cb.penalty_paid,0) AS penalty,
-        GREATEST(COALESCE(b.amount_due,0) + COALESCE(cb.penalty_paid,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS after_due,
-        0 AS surcharge
-      FROM billing b
-      LEFT JOIN customer_accounts ca ON b.customer_id = ca.id
-      LEFT JOIN cashier_billing cb ON cb.bill_id = b.bill_id
-      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2 ${whereFilter}
-      ORDER BY ca.last_name, ca.first_name
-    `;
-
-    console.log('Executing query with params:', params);
-    const result = await pool.query(query, params);
-    console.log(`Query returned ${result.rows.length} rows`);
-    
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching daily collector sheet:', err);
-    console.error('Error details:', {
-      message: err.message,
-      stack: err.stack,
-      query: err.query,
-      parameters: err.parameters
-    });
-    res.status(500).json({ 
-      error: 'Error fetching daily collector sheet',
-      message: err.message,
-      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
-  }
-});
-
-// Compatibility endpoint: billing-sheet using startDate/endDate
-// Maps the given date range to month/year and reuses the daily-collector logic
-router.get('/billing-sheet', async (req, res) => {
-  try {
-    const { startDate, endDate, zone, collector } = req.query;
-    if (!startDate) {
-      return res.status(400).json({ error: 'startDate is required' });
-    }
-
-    const start = new Date(startDate);
-    if (isNaN(start.getTime())) {
-      return res.status(400).json({ error: 'Invalid startDate' });
-    }
-
-    const month = start.getUTCMonth() + 1; // 1-12
-    const year = start.getUTCFullYear();
-
-    // Build filter (zone or collector)
-    const params = [month, year];
-    let whereFilter = '';
-    const filterValue = zone || collector;
-    if (filterValue && String(filterValue).toUpperCase() !== 'ALL' && filterValue !== '') {
-      params.push(filterValue);
-      whereFilter = ' AND (ca.barangay = $3 OR ca.city = $3)';
-    }
-
-    const query = `
-      SELECT 
-        COALESCE(NULLIF(TRIM(ca.barangay), ''), NULLIF(TRIM(ca.city), ''), '') AS zone,
-        COALESCE(ca.first_name || ' ' || ca.last_name, '') AS name,
-        TRIM(BOTH ', ' FROM COALESCE(ca.province,'') || ', ' || COALESCE(ca.city,'') || ', ' || COALESCE(ca.barangay,'')) AS address,
-        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN 'SC' ELSE 'ACTIVE' END AS status1,
-        '' AS status2,
-        COALESCE(b.current_reading,0) AS present_reading,
-        COALESCE(b.previous_reading,0) AS previous_reading,
-        COALESCE(b.current_reading,0) - COALESCE(b.previous_reading,0) AS used,
-        COALESCE(b.amount_due,0) AS bill_amount,
-        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END AS scd,
-        GREATEST(COALESCE(b.amount_due,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS total_amount,
-        COALESCE(cb.receipt_number,'') AS or_number,
-        TO_CHAR(COALESCE(cb.payment_date, b.due_date), 'MM-DD') AS pay_date,
-        COALESCE(cb.penalty_paid,0) AS penalty,
-        GREATEST(COALESCE(b.amount_due,0) + COALESCE(cb.penalty_paid,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS after_due,
-        0 AS surcharge
-      FROM billing b
-      LEFT JOIN customer_accounts ca ON b.customer_id = ca.id
-      LEFT JOIN cashier_billing cb ON cb.bill_id = b.bill_id
-      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2 ${whereFilter}
-      ORDER BY ca.last_name, ca.first_name
-    `;
-
-    console.log('Billing-sheet (compat) params mapped to month/year:', { month, year, zone, collector });
-    const result = await pool.query(query, params);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching billing-sheet (compat):', err);
-    res.status(500).json({ error: 'Error fetching billing sheet' });
-  }
-});
-// Monthly Statistics
-router.get('/monthly-stats', async (req, res) => {
-  try {
-    const { startDate, endDate } = req.query;
-    console.log('Monthly stats report params:', { startDate, endDate });
-    
-    let query;
-    let params = [];
-    
-    if (startDate && endDate) {
-      query = `
-      SELECT 
-          DATE_TRUNC('month', b.billing_date) as month,
-        COUNT(DISTINCT b.customer_id) as activeCustomers,
-          SUM(b.amount_due) as totalBilled,
-          SUM(CASE WHEN b.status = 'Paid' THEN b.amount_due ELSE 0 END) as totalCollected,
-          COUNT(CASE WHEN b.status = 'Unpaid' OR b.status IS NULL THEN 1 END) as unpaidBills,
-          AVG(b.amount_due) as averageBillAmount
-      FROM bills b
-        WHERE b.billing_date BETWEEN $1 AND $2
-        GROUP BY DATE_TRUNC('month', b.billing_date)
-      ORDER BY month DESC
-    `;
-      params = [startDate, endDate];
-    } else {
-      query = `
-        SELECT 
-          DATE_TRUNC('month', b.billing_date) as month,
-          COUNT(DISTINCT b.customer_id) as activeCustomers,
-          SUM(b.amount_due) as totalBilled,
-          SUM(CASE WHEN b.status = 'Paid' THEN b.amount_due ELSE 0 END) as totalCollected,
-          COUNT(CASE WHEN b.status = 'Unpaid' OR b.status IS NULL THEN 1 END) as unpaidBills,
-          AVG(b.amount_due) as averageBillAmount
-        FROM bills b
-        WHERE b.billing_date IS NOT NULL
-        GROUP BY DATE_TRUNC('month', b.billing_date)
-        ORDER BY month DESC
-      `;
-    }
-    
-    console.log('Executing monthly stats query with params:', params);
-    const result = await pool.query(query, params);
-    console.log('Monthly stats result:', result.rows);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching monthly statistics:', err);
-    res.status(500).json({ message: 'Error fetching monthly statistics' });
+    res.status(500).json({ message: 'Error fetching zones', error: err.message });
   }
 });
 
@@ -1034,16 +897,16 @@ router.get('/overview', authMiddleware, async (req, res) => {
     
     // Get total bills
     const billsQuery = `
-      SELECT COUNT(*) as "totalBills", COALESCE(SUM(amount), 0) as "totalRevenue"
-      FROM bills 
-      WHERE created_at BETWEEN $1 AND $2
+      SELECT COUNT(*) as "totalBills", COALESCE(SUM(amount_due), 0) as "totalRevenue"
+      FROM billing 
+      WHERE created_at BETWEEN $1::timestamp AND $2::timestamp
     `;
     
     // Get pending approvals
     const approvalsQuery = `
       SELECT COUNT(*) as "pendingApprovals"
       FROM approval_requests 
-      WHERE status = 'pending' AND created_at BETWEEN $1 AND $2
+      WHERE status = 'pending' AND created_at BETWEEN $1::timestamp AND $2::timestamp
     `;
     
     // Get active customers
@@ -1067,7 +930,7 @@ router.get('/overview', authMiddleware, async (req, res) => {
     res.json(overview);
   } catch (error) {
     console.error('Error fetching overview report:', error);
-    res.status(500).json({ error: 'Failed to fetch overview report' });
+    res.status(500).json({ error: 'Failed to fetch overview report', detail: error.message });
   }
 });
 
@@ -1324,16 +1187,16 @@ router.get('/overview', authMiddleware, async (req, res) => {
     
     // Get total bills
     const billsQuery = `
-      SELECT COUNT(*) as "totalBills", COALESCE(SUM(amount), 0) as "totalRevenue"
-      FROM bills 
-      WHERE created_at BETWEEN $1 AND $2
+      SELECT COUNT(*) as "totalBills", COALESCE(SUM(amount_due), 0) as "totalRevenue"
+      FROM billing 
+      WHERE created_at BETWEEN $1::timestamp AND $2::timestamp
     `;
     
     // Get pending approvals
     const approvalsQuery = `
       SELECT COUNT(*) as "pendingApprovals"
       FROM approval_requests 
-      WHERE status = 'pending' AND created_at BETWEEN $1 AND $2
+      WHERE status = 'pending' AND created_at BETWEEN $1::timestamp AND $2::timestamp
     `;
     
     // Get active customers
@@ -1357,7 +1220,7 @@ router.get('/overview', authMiddleware, async (req, res) => {
     res.json(overview);
   } catch (error) {
     console.error('Error fetching overview report:', error);
-    res.status(500).json({ error: 'Failed to fetch overview report' });
+    res.status(500).json({ error: 'Failed to fetch overview report', detail: error.message });
   }
 });
 
