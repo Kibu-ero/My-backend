@@ -748,6 +748,83 @@ router.get('/monthly-stats', async (req, res) => {
 });
 
 // Get available zones for billing sheet
+// Daily Collector Billing Sheet - month/year and optional zone/collector
+router.get('/daily-collector', async (req, res) => {
+  try {
+    const { month, year, collector, zone } = req.query; // month as 1-12 or name, year as 4-digit
+    if (!month || !year) {
+      return res.status(400).json({ error: 'month and year are required' });
+    }
+
+    // Normalize month to number 1-12
+    const monthMap = {
+      'JANUARY': 1,'FEBRUARY': 2,'MARCH': 3,'APRIL': 4,'MAY': 5,'JUNE': 6,
+      'JULY': 7,'AUGUST': 8,'SEPTEMBER': 9,'OCTOBER': 10,'NOVEMBER': 11,'DECEMBER': 12
+    };
+    const m = isNaN(month) ? (monthMap[String(month).toUpperCase()] || 1) : parseInt(month, 10);
+    const y = parseInt(year, 10);
+
+    console.log('Daily collector query params:', { month: m, year: y, collector, zone });
+
+    const params = [m, y];
+    let whereFilter = '';
+    
+    // Support both collector (legacy) and zone parameter
+    const filterValue = zone || collector;
+    
+    // If filter is provided and not 'ALL', add WHERE clause
+    if (filterValue && filterValue.toUpperCase() !== 'ALL' && filterValue !== '') {
+      params.push(filterValue);
+      // Match by barangay or city (no b.zone column in current schema)
+      whereFilter = ' AND (ca.barangay = $3 OR ca.city = $3)';
+    }
+
+    const query = `
+      SELECT 
+        COALESCE(NULLIF(TRIM(ca.barangay), ''), NULLIF(TRIM(ca.city), ''), '') AS zone,
+        COALESCE(ca.first_name || ' ' || ca.last_name, '') AS name,
+        TRIM(BOTH ', ' FROM COALESCE(ca.province,'') || ', ' || COALESCE(ca.city,'') || ', ' || COALESCE(ca.barangay,'')) AS address,
+        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN 'SC' ELSE 'ACTIVE' END AS status1,
+        COALESCE(ca.status,'') AS status2,
+        COALESCE(b.current_reading,0) AS present_reading,
+        COALESCE(b.previous_reading,0) AS previous_reading,
+        COALESCE(b.current_reading,0) - COALESCE(b.previous_reading,0) AS used,
+        COALESCE(b.amount_due,0) AS bill_amount,
+        CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END AS scd,
+        GREATEST(COALESCE(b.amount_due,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS total_amount,
+        COALESCE(cb.receipt_number,'') AS or_number,
+        TO_CHAR(COALESCE(cb.payment_date, b.due_date), 'MM-DD') AS pay_date,
+        COALESCE(cb.penalty_paid,0) AS penalty,
+        GREATEST(COALESCE(b.amount_due,0) + COALESCE(cb.penalty_paid,0) - (CASE WHEN (DATE_PART('year', CURRENT_DATE) - DATE_PART('year', COALESCE(ca.birthdate, CURRENT_DATE))) >= 60 THEN ROUND(COALESCE(b.amount_due,0) * 0.05,2) ELSE 0 END),0) AS after_due,
+        0 AS surcharge
+      FROM billing b
+      LEFT JOIN customer_accounts ca ON b.customer_id = ca.id
+      LEFT JOIN cashier_billing cb ON cb.bill_id = b.bill_id
+      WHERE EXTRACT(MONTH FROM b.created_at) = $1 AND EXTRACT(YEAR FROM b.created_at) = $2 ${whereFilter}
+      ORDER BY ca.last_name, ca.first_name
+    `;
+
+    console.log('Executing query with params:', params);
+    const result = await pool.query(query, params);
+    console.log(`Query returned ${result.rows.length} rows`);
+    
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching daily collector sheet:', err);
+    console.error('Error details:', {
+      message: err.message,
+      stack: err.stack,
+      query: err.query,
+      parameters: err.parameters
+    });
+    res.status(500).json({ 
+      error: 'Error fetching daily collector sheet',
+      message: err.message,
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
 router.get('/billing-sheet-zones', async (req, res) => {
   try {
     const { month, year } = req.query;
