@@ -4,8 +4,7 @@ const path = require('path');
 require("dotenv").config({ path: path.join(__dirname, '.env') });
 
 const app = express();
-// const settingsRoutes = require('./routes/settings');
-// app.use('/api/settings', settingsRoutes);
+
 // CORS configuration
 const rawOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || "http://localhost:3000";
 const allowedOrigins = rawOrigins.split(",").map((o) => o.trim());
@@ -50,6 +49,10 @@ app.use((req, res, next) => {
   next();
 });
 
+// Maintenance mode middleware (allows login and settings access)
+const checkMaintenanceMode = require('./middleware/maintenanceMode');
+app.use(checkMaintenanceMode);
+
 // Routes
 const paymentSubmissionRoutes = require('./routes/paymentSubmission');
 const cashierBillingRoutes = require("./routes/cashierBilling");
@@ -67,35 +70,7 @@ const auditLogsRoutes = require('./routes/auditLogs');
 const { router: otpRoutes } = require('./routes/otp');
 const penaltyRoutes = require('./src/routes/penalties');
 const creditRoutes = require('./src/routes/credits');
-// const settingsRoutes = require('./routes/settings');
-
-// Validate that all routes are actually routers (routers are objects with methods like use, get, post, etc.)
-const routes = [
-  { name: 'paymentSubmissionRoutes', route: paymentSubmissionRoutes },
-  { name: 'cashierBillingRoutes', route: cashierBillingRoutes },
-  { name: 'authRoutes', route: authRoutes },
-  { name: 'billingRoutes', route: billingRoutes },
-  { name: 'employeeRoutes', route: employeeRoutes },
-  { name: 'customerRoutes', route: customerRoutes },
-  { name: 'paymentRoutes', route: paymentRoutes },
-  { name: 'billRoutes', route: billRoutes },
-  { name: 'uploadRoutes', route: uploadRoutes },
-  { name: 'reportRoutes', route: reportRoutes },
-  { name: 'dashboardRoutes', route: dashboardRoutes },
-  { name: 'archiveBillingRouter', route: archiveBillingRouter },
-  { name: 'auditLogsRoutes', route: auditLogsRoutes },
-  { name: 'otpRoutes', route: otpRoutes },
-  { name: 'penaltyRoutes', route: penaltyRoutes },
-  { name: 'creditRoutes', route: creditRoutes },
-];
-
-routes.forEach(({ name, route }) => {
-  // Express routers are functions (callable) that also have methods like use, get, post, etc.
-  if (!route || (typeof route !== 'function' && typeof route !== 'object') || typeof route.use !== 'function') {
-    console.error(`❌ ${name} is not a valid router. Type: ${typeof route}, Value:`, route);
-    throw new Error(`${name} is not a valid Express router`);
-  }
-});
+const settingsRoutes = require('./routes/settings');
 
 // Initialize automatic penalty processing
 const { schedulePenaltyProcessing } = require('./src/utils/scheduler');
@@ -113,16 +88,21 @@ app.use("/api/bills", billRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use('/api', archiveBillingRouter);
+app.use(archiveBillingRouter);
 app.use('/api/audit-logs', auditLogsRoutes);
 app.use('/api/otp', otpRoutes);
 app.use('/api/penalties', penaltyRoutes);
 app.use('/api/credits', creditRoutes);
-// app.use('/api/settings', settingsRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// API health (useful for Vercel /api rewrite testing)
+app.get('/api/healthz', (req, res) => {
+  res.json({ status: 'ok', path: '/api/healthz', timestamp: new Date().toISOString() });
 });
 
 // Error handling
