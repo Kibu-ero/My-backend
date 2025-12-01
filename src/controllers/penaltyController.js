@@ -80,7 +80,7 @@ exports.calculatePenalty = async (req, res) => {
       });
     }
     
-    const penaltyInfo = calculatePenalty(
+    const penaltyInfo = await calculatePenalty(
       parseFloat(amount), 
       new Date(dueDate), 
       currentDate ? new Date(currentDate) : new Date()
@@ -129,15 +129,15 @@ exports.getOverdueBills = async (req, res) => {
     `);
     
     // Calculate current penalty for each bill
-    const overdueBills = result.rows.map(bill => {
-      const penaltyInfo = calculatePenalty(bill.amount_due, bill.due_date);
+    const overdueBills = await Promise.all(result.rows.map(async bill => {
+      const penaltyInfo = await calculatePenalty(bill.amount_due, bill.due_date);
       return {
         ...bill,
         calculated_penalty: penaltyInfo.penaltyAmount,
         penalty_rate: penaltyInfo.penaltyRate,
         should_update_penalty: Math.abs((bill.penalty || 0) - penaltyInfo.penaltyAmount) > 0.01
       };
-    });
+    }));
     
     res.status(200).json({
       success: true,
