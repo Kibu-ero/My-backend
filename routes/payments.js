@@ -1,11 +1,20 @@
 const express = require("express");
 const router = express.Router();
-const paymentController = require("../src/controllers/paymentController");
+const customerController = require("../backend/src/controllers/CustomerController");
 
-// Get all unpaid or pending bills
-router.get("/unpaid", paymentController.getUnpaidBills);
+// Get all customers
+router.get("/", customerController.getAllCustomers);
 
-// Mark a bill as paid
-router.put("/mark-paid/:id", paymentController.markBillAsPaid);
+// Get customer by ID
+router.get("/:id", customerController.getCustomerById);
+
+// Add new customer
+router.post("/", customerController.addCustomer);
+
+// Update customer
+router.put("/:id", customerController.updateCustomer);
+
+// Update customer status
+router.put("/:id/status", customerController.updateCustomerStatus);
 
 module.exports = router;
