@@ -1,19 +1,67 @@
 const pool = require("../../db");
 
 /**
+ * Get system settings for penalty calculation
+ */
+async function getPenaltySettings() {
+  try {
+    const result = await pool.query(`
+      SELECT setting_key, setting_value 
+      FROM system_settings 
+      WHERE setting_key IN ('late_payment_fee', 'due_date_grace_period')
+    `);
+    
+    const settings = {};
+    result.rows.forEach(row => {
+      settings[row.setting_key] = row.setting_value;
+    });
+    
+    return {
+      latePaymentFee: settings.late_payment_fee ? parseFloat(settings.late_payment_fee) : null,
+      gracePeriod: settings.due_date_grace_period ? parseInt(settings.due_date_grace_period) : 0
+    };
+  } catch (error) {
+    console.error('Error fetching penalty settings:', error);
+    return { latePaymentFee: null, gracePeriod: 0 };
+  }
+}
+
+/**
  * Calculate penalty for overdue bills
  * @param {number} baseAmount - The base bill amount
  * @param {Date} dueDate - The due date of the bill
  * @param {Date} currentDate - Current date (defaults to today)
+ * @param {Object} settings - Optional settings override {latePaymentFee, gracePeriod}
  * @returns {Object} - Penalty details
  */
-const calculatePenalty = (baseAmount, dueDate, currentDate = new Date()) => {
+const calculatePenalty = async (baseAmount, dueDate, currentDate = new Date(), settings = null) => {
   const due = new Date(dueDate);
   const today = new Date(currentDate);
   
+  // Get settings if not provided
+  if (!settings) {
+    settings = await getPenaltySettings();
+  }
+  
   // Calculate days overdue
   const timeDiff = today.getTime() - due.getTime();
-  const daysOverdue = Math.ceil(timeDiff / (1000 * 3600 * 24));
+  let daysOverdue = Math.ceil(timeDiff / (1000 * 3600 * 24));
+  
+  // Apply grace period - no penalty during grace period
+  if (settings.gracePeriod > 0 && daysOverdue > 0 && daysOverdue <= settings.gracePeriod) {
+    return {
+      penaltyAmount: 0,
+      daysOverdue: daysOverdue,
+      penaltyRate: 0,
+      hasPenalty: false,
+      inGracePeriod: true
+    };
+  }
+  
+  // Adjust days overdue by grace period for calculation
+  if (settings.gracePeriod > 0 && daysOverdue > settings.gracePeriod) {
+    daysOverdue = daysOverdue - settings.gracePeriod;
+  }
   
   if (daysOverdue <= 0) {
     return {
@@ -24,25 +72,33 @@ const calculatePenalty = (baseAmount, dueDate, currentDate = new Date()) => {
     };
   }
   
-  // Penalty calculation rules:
-  // - 10% penalty after 1 day overdue
-  // - Additional 2% for every 30 days (compound)
-  let penaltyRate = 0.10; // Base 10% penalty
+  let penaltyAmount = 0;
   
-  if (daysOverdue > 30) {
-    const additionalPeriods = Math.floor((daysOverdue - 30) / 30);
-    penaltyRate += (additionalPeriods * 0.02); // Additional 2% per 30 days
+  // Use late_payment_fee from settings if available (flat fee)
+  if (settings.latePaymentFee !== null && settings.latePaymentFee > 0) {
+    penaltyAmount = settings.latePaymentFee;
+  } else {
+    // Fallback to percentage-based calculation
+    // - 10% penalty after grace period
+    // - Additional 2% for every 30 days (compound)
+    let penaltyRate = 0.10; // Base 10% penalty
+    
+    if (daysOverdue > 30) {
+      const additionalPeriods = Math.floor((daysOverdue - 30) / 30);
+      penaltyRate += (additionalPeriods * 0.02); // Additional 2% per 30 days
+    }
+    
+    // Cap penalty at 50% of base amount
+    penaltyRate = Math.min(penaltyRate, 0.50);
+    penaltyAmount = baseAmount * penaltyRate;
   }
   
-  // Cap penalty at 50% of base amount
-  penaltyRate = Math.min(penaltyRate, 0.50);
-  
-  const penaltyAmount = Math.round(baseAmount * penaltyRate * 100) / 100; // Round to 2 decimal places
+  penaltyAmount = Math.round(penaltyAmount * 100) / 100; // Round to 2 decimal places
   
   return {
     penaltyAmount,
-    daysOverdue,
-    penaltyRate: Math.round(penaltyRate * 100), // Convert to percentage
+    daysOverdue: daysOverdue + (settings.gracePeriod || 0),
+    penaltyRate: settings.latePaymentFee !== null ? 0 : Math.round((penaltyAmount / baseAmount) * 100),
     hasPenalty: penaltyAmount > 0
   };
 };
@@ -75,8 +131,11 @@ const processOverdueBills = async () => {
     let processedCount = 0;
     let penaltyAppliedCount = 0;
     
+    // Get penalty settings once for all bills
+    const penaltySettings = await getPenaltySettings();
+    
     for (const bill of overdueBills.rows) {
-      const penaltyInfo = calculatePenalty(bill.amount_due, bill.due_date);
+      const penaltyInfo = await calculatePenalty(bill.amount_due, bill.due_date, new Date(), penaltySettings);
       
       // Only update if penalty should be applied and it's different from current penalty
       if (penaltyInfo.hasPenalty && bill.penalty !== penaltyInfo.penaltyAmount) {
@@ -144,7 +203,7 @@ const getPenaltySummary = async (billId) => {
     }
     
     const bill = result.rows[0];
-    const penaltyInfo = calculatePenalty(bill.amount_due, bill.due_date);
+    const penaltyInfo = await calculatePenalty(bill.amount_due, bill.due_date);
     
     return {
       billId: bill.bill_id,
