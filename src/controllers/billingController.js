@@ -282,10 +282,23 @@ exports.createBill = async (req, res) => {
       }
     }
 
-    // Notify customer via SMS (best-effort)
+    // Notify customer via SMS (best-effort) - check if notifications are enabled
     try {
-      const customerPhone = customerResult.rows[0]?.phone_number;
-      if (customerPhone) {
+      // Check if email notifications are enabled
+      const notificationSetting = await pool.query(
+        'SELECT setting_value FROM system_settings WHERE setting_key = $1',
+        ['email_notifications']
+      );
+      
+      const notificationsEnabled = notificationSetting.rows.length > 0 
+        ? notificationSetting.rows[0].setting_value === 'true'
+        : false;
+      
+      if (!notificationsEnabled) {
+        console.log('⚠️ Notifications are disabled in system settings - skipping SMS notification');
+      } else {
+        const customerPhone = customerResult.rows[0]?.phone_number;
+        if (customerPhone) {
         const due = new Date(due_date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
         const amountStr = (Math.round(finalAmountDue * 100) / 100).toFixed(2);
         const consumptionStr = `${consumption} cu.m.`;
@@ -311,9 +324,10 @@ exports.createBill = async (req, res) => {
           to: customerPhone,
           text: smsText
         });
-        console.log(`✅ SMS notification sent to ${customerPhone} for bill ${result.rows[0].bill_id}`);
-      } else {
-        console.warn(`⚠️ No phone number found for customer ${customer_id} - SMS not sent`);
+          console.log(`✅ SMS notification sent to ${customerPhone} for bill ${result.rows[0].bill_id}`);
+        } else {
+          console.warn(`⚠️ No phone number found for customer ${customer_id} - SMS not sent`);
+        }
       }
     } catch (smsErr) {
       console.warn('SMS send (new bill) failed:', smsErr.message);
