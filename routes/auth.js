@@ -1,7 +1,7 @@
 console.log('LOADING backend/routes/auth.js');
 const express = require('express');
 const router = express.Router();
-const authController = require('../src/controllers/authController');
+const authController = require('../backend/src/controllers/authController');
 const { verifyToken } = require('../middleware/auth');
 
 // Registration Route
@@ -17,8 +17,5 @@ router.get('/verify', verifyToken, (req, res) => {
 
 // Restore real Approve Registration Route
 router.post('/approve-registration', authController.approveRegistration);
-
-// Forgot password: reset with resetToken issued by /api/otp/verify-reset
-router.post('/reset-password', authController.resetPasswordWithToken);
 
 module.exports = router;
