@@ -5,14 +5,14 @@ const {
   getBillByCustomerId,
   getBillById,
   updateBillStatus,
-} = require("../src/controllers/billingController");
-const { getAllCustomers } = require("../src/controllers/CustomerController");
+} = require("../backend/src/controllers/billingController");
+const { getAllCustomers } = require("../backend/src/controllers/CustomerController");
 const { verifyToken, requireRole } = require('../middleware/auth');
 const pool = require('../db');
 const router = express.Router();
 
-// ✅ Create a new bill (requires authentication)
-router.post("/", verifyToken, createBill);
+// ✅ Create a new bill
+router.post("/", createBill);
 
 // ✅ Get all bills
 router.get("/", getAllBills);
