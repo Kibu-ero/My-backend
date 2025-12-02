@@ -5,8 +5,8 @@ const {
   getBillByCustomerId,
   getBillById,
   updateBillStatus,
-} = require("../backend/src/controllers/billingController");
-const { getAllCustomers } = require("../backend/src/controllers/CustomerController");
+} = require("../src/controllers/billingController");
+const { getAllCustomers } = require("../src/controllers/CustomerController");
 const { verifyToken, requireRole } = require('../middleware/auth');
 const pool = require('../db');
 const router = express.Router();
