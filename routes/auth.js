@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const authController = require('../src/controllers/authController');
+const authController = require('../backend/src/controllers/authController');
 const { verifyToken } = require('../middleware/auth');
 
 // Registration Route
