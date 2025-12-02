@@ -1,5 +1,5 @@
 const express = require('express');
-const { addPayment, fetchPayments, fetchUnpaidBills, fetchPaymentsByCustomer } = require('../backend/src/controllers/cashierBillingController');
+const { addPayment, fetchPayments, fetchUnpaidBills, fetchPaymentsByCustomer } = require('../src/controllers/cashierBillingController');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const pool = require('../db');
 const router = express.Router();
