@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const { submitPaymentProof, getCustomerSubmissions } = require('../src/controllers/paymentSubmissionController');
+const { submitPaymentProof, getCustomerSubmissions } = require('../backend/src/controllers/paymentSubmissionController');
 
 const router = express.Router();
 const upload = multer({ dest: 'uploads/tmp/' });
