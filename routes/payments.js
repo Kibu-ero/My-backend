@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const paymentController = require("../src/controllers/paymentController");
+const paymentController = require("../backend/src/controllers/paymentController");
 
 // Get all unpaid or pending bills
 router.get("/unpaid", paymentController.getUnpaidBills);
