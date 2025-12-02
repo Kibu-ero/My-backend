@@ -1,20 +1,20 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const authController = require('../src/controllers/authController');
-const { verifyToken } = require('../middleware/auth');
+const customerController = require("../backend/src/controllers/CustomerController");
 
-// Registration Route
-router.post('/register', authController.register);
+// Get all customers
+router.get("/", customerController.getAllCustomers);
 
-// Login Route
-router.post('/login', authController.login);
+// Get customer by ID
+router.get("/:id", customerController.getCustomerById);
 
-// Token Verification Route
-router.get('/verify', verifyToken, (req, res) => {
-  res.json({ valid: true, user: req.user });
-});
+// Add new customer
+router.post("/", customerController.addCustomer);
 
-// Restore real Approve Registration Route
-router.post('/approve-registration', authController.approveRegistration);
+// Update customer
+router.put("/:id", customerController.updateCustomer);
+
+// Update customer status
+router.put("/:id/status", customerController.updateCustomerStatus);
 
 module.exports = router;
