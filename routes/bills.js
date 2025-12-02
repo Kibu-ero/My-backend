@@ -1,5 +1,5 @@
 const express = require('express');
-const { getCustomerBills } = require('../backend/src/controllers/billsController');
+const { getCustomerBills } = require('../src/controllers/billsController');
 
 const router = express.Router();
 
