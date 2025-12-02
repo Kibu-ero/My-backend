@@ -1,4 +1,4 @@
-const pool = require('../../../db');
+const pool = require('../../db');
 
 /**
  * Track and check login attempts
