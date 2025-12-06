@@ -1,10 +1,5 @@
 {
   "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://my-backend-8f8v.onrender.com/api/:path*"
-    }
+    { "source": "/api/(.*)", "destination": "https://my-backend-mz4k.onrender.com/api/$1" }
   ]
 }
-
-
