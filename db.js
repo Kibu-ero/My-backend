@@ -2,12 +2,17 @@ require("dotenv").config();
 const { Pool } = require("pg");
 
 // Prefer DATABASE_URL if provided; otherwise, fall back to individual vars
+// Render PostgreSQL always requires SSL
+const isRender = process.env.RENDER === "true" || process.env.DATABASE_URL?.includes("render.com");
 const shouldUseSsl =
-  process.env.PGSSLMODE === "require" || process.env.DB_SSL === "true";
+  isRender ||
+  process.env.PGSSLMODE === "require" ||
+  process.env.DB_SSL === "true" ||
+  process.env.NODE_ENV === "production";
 
 /**
  * Build pool configuration compatible with Render Postgres.
- * - Render External URL requires SSL. We set rejectUnauthorized=false
+ * - Render Postgres always requires SSL. We set rejectUnauthorized=false
  *   to work with managed certs in node-postgres.
  */
 const poolConfig = process.env.DATABASE_URL
@@ -16,10 +21,11 @@ const poolConfig = process.env.DATABASE_URL
       ssl: shouldUseSsl ? { rejectUnauthorized: false } : false,
     }
   : {
-      user: process.env.DB_USER || "postgres",
+      // Fallback for local development (requires individual env vars)
+      user: process.env.DB_USER,
       host: process.env.DB_HOST || "localhost",
-      database: process.env.DB_NAME || "DWS",
-      password: process.env.DB_PASSWORD || "kibu",
+      database: process.env.DB_NAME,
+      password: process.env.DB_PASSWORD,
       port: Number(process.env.DB_PORT) || 5432,
       ssl: shouldUseSsl ? { rejectUnauthorized: false } : false,
     };
@@ -32,24 +38,7 @@ pool
   .connect()
   .then(() => {
     console.log("✅ PostgreSQL Connected!");
-    const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
-    const dbName = process.env.DB_NAME || 'DWS';
-    if (process.env.DATABASE_URL) {
-      if (isProd) {
-        try {
-          const url = new URL(process.env.DATABASE_URL);
-          url.username = '***';
-          url.password = '***';
-          console.log(`Database: ${url.toString()}`);
-        } catch {
-          console.log('Database: [hidden]');
-        }
-      } else {
-        console.log(`Database: ${process.env.DATABASE_URL}`);
-      }
-    } else {
-      console.log(`Database: ${dbName}`);
-    }
+    console.log(`Database: ${process.env.DB_NAME || process.env.DATABASE_URL || "DWS"}`);
   })
   .catch((err) => {
     console.error("❌ Connection error", err);
