@@ -7,15 +7,34 @@ const app = express();
 // const settingsRoutes = require('./routes/settings');
 // app.use('/api/settings', settingsRoutes);
 // CORS configuration
-const rawOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || "http://localhost:3000";
+// Allow Vercel domain and any configured frontend URLs
+const defaultOrigins = [
+  "http://localhost:3000",
+  "https://dolores-wd.vercel.app",
+  "https://*.vercel.app" // Allow all Vercel preview deployments
+];
+const rawOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || defaultOrigins.join(",");
 const allowedOrigins = rawOrigins.split(",").map((o) => o.trim());
 
 app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true); // allow non-browser requests
+      // Check exact match
       const isAllowed = allowedOrigins.some((o) => o === origin);
       if (isAllowed) return callback(null, true);
+      // Check if origin matches Vercel pattern (*.vercel.app)
+      if (origin.includes('.vercel.app')) return callback(null, true);
+      // Check if origin matches any pattern with wildcard
+      const matchesPattern = allowedOrigins.some((pattern) => {
+        if (pattern.includes('*')) {
+          const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+          return regex.test(origin);
+        }
+        return false;
+      });
+      if (matchesPattern) return callback(null, true);
+      console.warn(`CORS blocked: ${origin} not in allowed origins:`, allowedOrigins);
       return callback(new Error(`CORS blocked: ${origin} not in allowed origins`));
     },
     credentials: true,
@@ -32,6 +51,7 @@ app.options(
       if (!origin) return callback(null, true);
       const isAllowed = allowedOrigins.some((o) => o === origin);
       if (isAllowed) return callback(null, true);
+      if (origin.includes('.vercel.app')) return callback(null, true);
       return callback(new Error(`CORS blocked: ${origin} not in allowed origins`));
     },
     credentials: true,
