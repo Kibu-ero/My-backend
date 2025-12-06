@@ -8,13 +8,9 @@ const app = express();
 // app.use('/api/settings', settingsRoutes);
 // CORS configuration
 // Allow Vercel domain and any configured frontend URLs
-const defaultOrigins = [
-  "http://localhost:3000",
-  "https://dolores-wd.vercel.app",
-  "https://*.vercel.app" // Allow all Vercel preview deployments
-];
-const rawOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || defaultOrigins.join(",");
-const allowedOrigins = rawOrigins.split(",").map((o) => o.trim());
+const defaultOrigins = "https://dolores-wd.vercel.app,http://localhost:3000";
+const rawOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL || defaultOrigins;
+const allowedOrigins = rawOrigins.split(",").map((o) => o.trim()).filter(o => o.length > 0);
 
 app.use(
   cors({
