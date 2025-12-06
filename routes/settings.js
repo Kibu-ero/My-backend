@@ -35,8 +35,9 @@ router.put('/', async (req, res) => {
       // Validate setting key
       const validKeys = [
         'system_name', 'company_name', 'contact_email', 'water_rate', 
-        'late_payment_fee', 'due_date_grace_period', 'email_notifications',
-        'maintenance_mode', 'backup_frequency', 'max_login_attempts', 'session_timeout'
+        'late_payment_fee', 'due_date_grace_period', 'senior_citizen_discount',
+        'email_notifications', 'maintenance_mode', 'backup_frequency', 
+        'max_login_attempts', 'session_timeout'
       ];
       
       if (!validKeys.includes(key)) {
@@ -57,9 +58,18 @@ router.put('/', async (req, res) => {
     await Promise.all(updates);
     
     // Log the settings update
-    await logAudit(userId, 'SETTINGS_UPDATE', 'System settings updated', {
-      updatedSettings: Object.keys(settings)
-    });
+    try {
+      await logAudit({
+        user_id: userId,
+        action: 'SETTINGS_UPDATE',
+        entity: 'system_settings',
+        entity_id: null,
+        details: { updatedSettings: Object.keys(settings) },
+        ip_address: req.ip
+      });
+    } catch (auditError) {
+      console.warn('Failed to log audit:', auditError);
+    }
     
     res.json({ message: 'Settings updated successfully' });
   } catch (error) {
@@ -121,9 +131,18 @@ router.put('/water-rates', async (req, res) => {
       await pool.query('COMMIT');
       
       // Log the water rates update
-      await logAudit(userId, 'WATER_RATES_UPDATE', 'Water rates updated', {
-        ratesCount: rates.length
-      });
+      try {
+        await logAudit({
+          user_id: userId,
+          action: 'WATER_RATES_UPDATE',
+          entity: 'water_rates',
+          entity_id: null,
+          details: { ratesCount: rates.length },
+          ip_address: req.ip
+        });
+      } catch (auditError) {
+        console.warn('Failed to log audit:', auditError);
+      }
       
       res.json({ message: 'Water rates updated successfully' });
     } catch (error) {
@@ -176,9 +195,18 @@ router.put('/payment', async (req, res) => {
     
     await Promise.all(updates);
     
-    await logAudit(userId, 'PAYMENT_SETTINGS_UPDATE', 'Payment settings updated', {
-      updatedSettings: Object.keys(settings)
-    });
+    try {
+      await logAudit({
+        user_id: userId,
+        action: 'PAYMENT_SETTINGS_UPDATE',
+        entity: 'system_settings',
+        entity_id: null,
+        details: { updatedSettings: Object.keys(settings) },
+        ip_address: req.ip
+      });
+    } catch (auditError) {
+      console.warn('Failed to log audit:', auditError);
+    }
     
     res.json({ message: 'Payment settings updated successfully' });
   } catch (error) {
@@ -188,3 +216,4 @@ router.put('/payment', async (req, res) => {
 });
 
 module.exports = router;
+
