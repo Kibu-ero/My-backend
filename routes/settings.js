@@ -17,6 +17,11 @@ router.get('/', async (req, res) => {
     res.json(settings);
   } catch (error) {
     console.error('Error fetching settings:', error);
+    // If table doesn't exist, return empty object instead of 500
+    if (error.code === '42P01' || error.message.includes('does not exist')) {
+      console.warn('system_settings table does not exist yet, returning empty settings');
+      return res.json({});
+    }
     res.status(500).json({ message: 'Failed to fetch settings' });
   }
 });
