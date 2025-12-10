@@ -137,6 +137,19 @@ app.use('/api/penalties', penaltyRoutes);
 app.use('/api/credits', creditRoutes);
 app.use('/api/settings', settingsRoutes);
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Billink API Server',
+    status: 'running',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/health',
+      api: '/api/*'
+    }
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -151,10 +164,15 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Server
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
-});
+// Export app for Vercel serverless functions
+module.exports = app;
+
+// Only start server if not in Vercel environment
+if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+  });
+}
