@@ -11,6 +11,15 @@ console.log("✅ Auth Controller Loaded");
 // **Register User (For Customers Only)**
 exports.register = async (req, res) => {
   try {
+    // Check database connection
+    if (!pool) {
+      console.error("❌ Database pool not available");
+      return res.status(500).json({ 
+        message: "Database connection not available",
+        error: "Database pool is undefined"
+      });
+    }
+
     const {
       firstName,
       lastName,
@@ -26,41 +35,87 @@ exports.register = async (req, res) => {
       phoneNumber,
     } = req.body;
 
-    // Basic required field validation
+    // Log incoming request for debugging
+    console.log("📝 Registration attempt:", {
+      username,
+      email: email ? "provided" : "not provided",
+      phoneNumber: phoneNumber ? "provided" : "not provided",
+      meterNumber: meterNumber ? "provided" : "not provided"
+    });
+
+    // Basic required field validation (email is optional)
     if (!firstName || !lastName || !username || !password || !street || !barangay || !city || !province || !birthdate || !meterNumber || !phoneNumber) {
-      return res.status(400).json({ message: "Missing required fields" });
+      return res.status(400).json({ 
+        message: "Missing required fields",
+        missing: {
+          firstName: !firstName,
+          lastName: !lastName,
+          username: !username,
+          password: !password,
+          street: !street,
+          barangay: !barangay,
+          city: !city,
+          province: !province,
+          birthdate: !birthdate,
+          meterNumber: !meterNumber,
+          phoneNumber: !phoneNumber
+        }
+      });
+    }
+
+    // Validate email format if provided
+    if (email && email.trim() !== '') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        return res.status(400).json({ message: "Please provide a valid email address." });
+      }
     }
 
     // ✅ Check if username already exists in customer_accounts only
-    const existingUsername = await pool.query(
-      "SELECT * FROM customer_accounts WHERE username = $1",
-      [username]
-    );
+    try {
+      const existingUsername = await pool.query(
+        "SELECT * FROM customer_accounts WHERE username = $1",
+        [username]
+      );
 
-    if (existingUsername.rows.length > 0) {
-      return res.status(400).json({ message: "Username is already in use." });
+      if (existingUsername.rows.length > 0) {
+        return res.status(400).json({ message: "Username is already in use." });
+      }
+    } catch (dbError) {
+      console.error("❌ Database error checking username:", dbError);
+      throw dbError; // Re-throw to be caught by outer catch
     }
 
     // ✅ Check if email already exists in customer_accounts only (if email provided)
     if (email && email.trim() !== '') {
-      const existingUser = await pool.query(
-        "SELECT * FROM customer_accounts WHERE email = $1",
-        [email]
-      );
+      try {
+        const existingUser = await pool.query(
+          "SELECT * FROM customer_accounts WHERE email = $1",
+          [email.trim()]
+        );
 
-      if (existingUser.rows.length > 0) {
-        return res.status(400).json({ message: "Email is already in use." });
+        if (existingUser.rows.length > 0) {
+          return res.status(400).json({ message: "Email is already in use." });
+        }
+      } catch (dbError) {
+        console.error("❌ Database error checking email:", dbError);
+        throw dbError; // Re-throw to be caught by outer catch
       }
     }
 
     // ✅ Check if phone number already exists
-    const existingPhone = await pool.query(
-      "SELECT * FROM customer_accounts WHERE phone_number = $1",
-      [phoneNumber]
-    );
+    try {
+      const existingPhone = await pool.query(
+        "SELECT * FROM customer_accounts WHERE phone_number = $1",
+        [phoneNumber]
+      );
 
-    if (existingPhone.rows.length > 0) {
-      return res.status(400).json({ message: "Phone number is already in use." });
+      if (existingPhone.rows.length > 0) {
+        return res.status(400).json({ message: "Phone number is already in use." });
+      }
+    } catch (dbError) {
+      console.error("❌ Database error checking phone number:", dbError);
+      throw dbError; // Re-throw to be caught by outer catch
     }
 
     // ✅ Validate birthdate and calculate age
@@ -95,31 +150,70 @@ exports.register = async (req, res) => {
     // ✅ Hash Password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // ✅ Normalize email (empty string to null)
+    const normalizedEmail = (email && email.trim() !== '') ? email.trim() : null;
+
     // ✅ Insert new customer into customer_accounts with Pending status
-    const newUser = await pool.query(
-      `INSERT INTO customer_accounts 
-      (first_name, last_name, username, email, password, street, barangay, city, province, birthdate, meter_number, phone_number, senior_citizen, role, status, created_at) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'customer', 'Pending', NOW()) 
-      RETURNING *`,
-      [
-        firstName,
-        lastName,
-        username,
-        email || null, // Allow null email
-        hashedPassword,
-        street,
-        barangay,
-        city,
-        province,
-        birthdate,
-        meterNumber,
-        phoneNumber,
-        isSeniorCitizen,
-      ]
-    );
+    let newUser;
+    try {
+      newUser = await pool.query(
+        `INSERT INTO customer_accounts 
+        (first_name, last_name, username, email, password, street, barangay, city, province, birthdate, meter_number, phone_number, senior_citizen, role, status, created_at) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'customer', 'Pending', NOW()) 
+        RETURNING *`,
+        [
+          firstName?.trim() || firstName,
+          lastName?.trim() || lastName,
+          username?.trim() || username,
+          normalizedEmail,
+          hashedPassword,
+          street?.trim() || street,
+          barangay?.trim() || barangay,
+          city?.trim() || city,
+          province?.trim() || province,
+          birthdate,
+          meterNumber?.trim() || meterNumber,
+          phoneNumber?.trim() || phoneNumber,
+          isSeniorCitizen,
+        ]
+      );
+    } catch (insertError) {
+      console.error("❌ Database insert error:", insertError);
+      // Check for specific constraint violations
+      if (insertError.code === '23505') { // Unique violation
+        const constraint = insertError.constraint;
+        if (constraint && constraint.includes('username')) {
+          return res.status(400).json({ message: "Username is already in use." });
+        }
+        if (constraint && constraint.includes('email')) {
+          return res.status(400).json({ message: "Email is already in use." });
+        }
+        if (constraint && constraint.includes('phone_number')) {
+          return res.status(400).json({ message: "Phone number is already in use." });
+        }
+        if (constraint && constraint.includes('meter_number')) {
+          return res.status(400).json({ message: "Meter number is already in use." });
+        }
+        return res.status(400).json({ message: "A record with this information already exists." });
+      }
+      throw insertError; // Re-throw to be caught by outer catch
+    }
 
     console.log("✅ New customer registered (Pending Approval):", newUser.rows[0].email);
     console.log("📱 Phone number stored in DB:", newUser.rows[0].phone_number);
+
+    // Log audit trail for new registration (before sending response)
+    try {
+      await logAudit({
+        user_id: newUser.rows[0].id,
+        action: 'user_registered',
+        entity: 'customer_accounts',
+        entity_id: newUser.rows[0].id
+      });
+    } catch (auditError) {
+      // Log audit error but don't fail registration
+      console.error("⚠️ Audit log failed (non-critical):", auditError.message);
+    }
 
     // Do NOT send OTP here. Just return a message.
     res.status(201).json({
@@ -127,17 +221,43 @@ exports.register = async (req, res) => {
       user: newUser.rows[0],
       requiresOTP: false
     });
-    
-    // Log audit trail for new registration
-    await logAudit({
-      user_id: newUser.rows[0].id,
-      bill_id: null,
-      action: 'user_registered'
-    });
 
   } catch (error) {
     console.error("❌ Registration Error:", error);
-    res.status(500).json({ message: "Internal Server Error", error: error.message, code: error.code, detail: error.detail });
+    console.error("❌ Registration Error Stack:", error.stack);
+    console.error("❌ Registration Error Details:", {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      constraint: error.constraint,
+      table: error.table,
+      column: error.column,
+      name: error.name,
+      errno: error.errno,
+      syscall: error.syscall,
+      hostname: error.hostname,
+      port: error.port
+    });
+    
+    // Determine if this is a database connection error
+    const isDbError = error.code === 'ECONNREFUSED' || 
+                     error.code === 'ENOTFOUND' || 
+                     error.code === 'ETIMEDOUT' ||
+                     error.message?.includes('connect') ||
+                     error.message?.includes('Connection');
+
+    res.status(500).json({ 
+      message: isDbError ? "Database connection error" : "Internal Server Error", 
+      error: error.message, 
+      code: error.code, 
+      detail: error.detail,
+      constraint: error.constraint,
+      table: error.table,
+      column: error.column,
+      name: error.name,
+      // Include stack trace in development
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
 
@@ -145,7 +265,12 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { username, password } = req.body;
-    console.log("Login attempt:", username);
+    
+    if (!username || !password) {
+      return res.status(400).json({ message: "Username and password are required." });
+    }
+    
+    console.log("🔐 Login attempt for username:", username);
 
     // Check login attempts tracking
     const { recordFailedAttempt, isLocked, clearAttempts } = require('../utils/loginAttempts');
@@ -164,27 +289,42 @@ exports.login = async (req, res) => {
 
     let user;
     // Try customer_accounts
-    user = await pool.query(
-      "SELECT id, username, email, password, 'customer' AS role, first_name, last_name, status FROM customer_accounts WHERE username = $1",
-      [username]
-    );
-    console.log("Checked customer_accounts:", user.rows.length);
+    try {
+      user = await pool.query(
+        "SELECT id, username, email, password, 'customer' AS role, first_name, last_name, status FROM customer_accounts WHERE username = $1",
+        [username]
+      );
+      console.log("✅ Checked customer_accounts:", user.rows.length);
+    } catch (dbError) {
+      console.error("❌ Database error checking customer_accounts:", dbError.message);
+      throw dbError;
+    }
 
     if (user.rows.length === 0) {
       // Try users (admin/cashier)
-      user = await pool.query(
-        "SELECT id, username, email, password, role, name AS first_name, '' AS last_name FROM users WHERE username = $1",
-        [username]
-      );
-      console.log("Checked users:", user.rows.length);
+      try {
+        user = await pool.query(
+          "SELECT id, username, email, password, role, name AS first_name, '' AS last_name FROM users WHERE username = $1",
+          [username]
+        );
+        console.log("✅ Checked users table:", user.rows.length);
+      } catch (dbError) {
+        console.error("❌ Database error checking users:", dbError.message);
+        throw dbError;
+      }
     }
     if (user.rows.length === 0) {
       // Try employees
-      user = await pool.query(
-        "SELECT id, username, email, password, role, first_name, last_name FROM employees WHERE username = $1",
-        [username]
-      );
-      console.log("Checked employees:", user.rows.length);
+      try {
+        user = await pool.query(
+          "SELECT id, username, email, password, role, first_name, last_name FROM employees WHERE username = $1",
+          [username]
+        );
+        console.log("✅ Checked employees table:", user.rows.length);
+      } catch (dbError) {
+        console.error("❌ Database error checking employees:", dbError.message);
+        throw dbError;
+      }
     }
     if (user.rows.length === 0) {
       console.log("No user found for username:", username);
@@ -207,8 +347,13 @@ exports.login = async (req, res) => {
     }
 
     // Validate password
+    if (!user.rows[0].password) {
+      console.error("❌ User has no password set");
+      return res.status(400).json({ message: "Invalid username or password." });
+    }
+    
     const validPassword = await bcrypt.compare(password, user.rows[0].password);
-    console.log("Password valid:", validPassword);
+    console.log("✅ Password validation result:", validPassword);
 
     if (!validPassword) {
       // Record failed login attempt
@@ -232,20 +377,84 @@ exports.login = async (req, res) => {
     clearAttempts(username);
 
     // Generate JWT Token
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      console.error("❌ JWT_SECRET is not set in environment variables");
+      return res.status(500).json({ message: "Server configuration error. Please contact support." });
+    }
+    
     const token = jwt.sign(
       { id: user.rows[0].id, username: user.rows[0].username, email: user.rows[0].email, role: user.rows[0].role },
-      process.env.JWT_SECRET,
+      jwtSecret,
       { expiresIn: "1d" }
     );
-    console.log("JWT generated");
+    console.log("✅ JWT generated successfully");
 
     // Log audit trail for successful login
-    await logAudit({
-      user_id: user.rows[0].id,
-      bill_id: null,
-      action: 'login'
-    });
-    console.log("Audit logged");
+    try {
+      // Determine user type based on role
+      const role = user.rows[0].role || '';
+      let userType = role;
+      
+      // Format role for display (capitalize first letter, replace underscores)
+      const formattedRole = role
+        .split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+      
+      // Create a descriptive user type label
+      const userTypeLabels = {
+        'customer': 'Customer',
+        'cashier': 'Cashier',
+        'encoder': 'Encoder',
+        'admin': 'Administrator',
+        'finance_officer': 'Finance Officer',
+        'finance officer': 'Finance Officer'
+      };
+      
+      const displayUserType = userTypeLabels[role.toLowerCase()] || formattedRole || 'User';
+      
+      // Build full name if available
+      // Handle different table structures:
+      // - customer_accounts: first_name, last_name, middle_name
+      // - users: name (single field)
+      // - employees: first_name, last_name
+      let fullName = '';
+      if (user.rows[0].name) {
+        // users table has single 'name' field
+        fullName = user.rows[0].name;
+      } else {
+        // customer_accounts or employees have first_name and last_name
+        const firstName = user.rows[0].first_name || '';
+        const lastName = user.rows[0].last_name || '';
+        const middleName = user.rows[0].middle_name || '';
+        fullName = [firstName, middleName, lastName].filter(Boolean).join(' ').trim() || user.rows[0].username;
+      }
+      
+      const auditResult = await logAudit({
+        user_id: user.rows[0].id,
+        bill_id: null,
+        action: 'login',
+        entity: 'system',
+        entity_id: null,
+        details: { 
+          name: fullName,
+          description: `${displayUserType} logged in`
+        },
+        ip_address: req.ip || req.connection?.remoteAddress || null
+      });
+      console.log(`✅ Audit logged for login: ${displayUserType} ${user.rows[0].username} (ID: ${user.rows[0].id})`);
+      console.log(`✅ Audit log result:`, auditResult ? 'Success' : 'No result');
+    } catch (auditError) {
+      // Log audit error but don't fail login
+      console.error("⚠️ Audit log failed (non-critical):", auditError.message);
+      console.error("⚠️ Audit log error stack:", auditError.stack);
+      console.error("⚠️ Audit log error details:", {
+        user_id: user.rows[0].id,
+        username: user.rows[0].username,
+        error_code: auditError.code
+      });
+    }
 
     res.json({
       token,
@@ -258,7 +467,32 @@ exports.login = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Login Error:", error);
-    res.status(500).json({ message: "Internal Server Error" });
+    console.error("❌ Login Error Stack:", error.stack);
+    console.error("❌ Login Error Details:", {
+      message: error.message,
+      code: error.code,
+      name: error.name
+    });
+    
+    // Check for database connection errors
+    const isDbConnectionError = error.code === 'ECONNREFUSED' || 
+                                error.code === 'ENOTFOUND' || 
+                                error.code === 'ETIMEDOUT' ||
+                                error.code === '28P01' ||
+                                error.message?.includes('connect') ||
+                                error.message?.includes('Connection');
+    
+    if (isDbConnectionError) {
+      return res.status(503).json({ 
+        message: "Service temporarily unavailable - database connection error",
+        error: "Database connection failed"
+      });
+    }
+    
+    res.status(500).json({ 
+      message: "Internal Server Error",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
@@ -281,9 +515,8 @@ exports.approveRegistration = async (req, res) => {
     }
     // Update status to Approved
     await pool.query('UPDATE customer_accounts SET status = $1 WHERE id = $2', ['Approved', userId]);
-    // Generate and send OTP via Mocean Verify if configured, else fallback to Semaphore
-    const SEMAPHORE_API_KEY = process.env.SEMAPHORE_API_KEY;
-    const SEMAPHORE_SENDERNAME = process.env.SEMAPHORE_SENDERNAME || 'SEMAPHORE';
+
+    // Environment
     const MOCEAN_API_TOKEN = process.env.MOCEAN_API_TOKEN;
     const MOCEAN_BRAND = process.env.MOCEAN_BRAND || 'Billink';
 
@@ -301,55 +534,89 @@ exports.approveRegistration = async (req, res) => {
     const { otpStore } = require('../../routes/otp');
     const recipientNumber63 = normalizeToPH63Format(user.phone_number);
 
+    // FORCE SMS: Always send local OTP via Mocean SMS when token available (skip Verify)
     if (MOCEAN_API_TOKEN) {
       try {
         // Validate number format for Mocean (63 + 10 digits)
         if (!/^63\d{10}$/.test(recipientNumber63)) {
           return res.status(400).json({ message: 'Invalid phone format. Use 63XXXXXXXXXX (PH).', otpSent: false });
         }
-        const params = new URLSearchParams({ 'mocean-to': recipientNumber63, 'mocean-brand': MOCEAN_BRAND });
-        const mres = await axios.post(
-          'https://rest.moceanapi.com/rest/2/verify',
-          params,
-          { headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` } }
-        );
-        const data = mres.data || {};
-        const reqId = data.reqid || data.request_id || data.mocean_reqid;
+        const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+        const otp = generateOTP();
         const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-        otpStore.set(user.phone_number, { provider: 'mocean', reqId, expiresAt, purpose: 'registration', userId: user.id });
-        console.log('[APPROVE REGISTRATION] OTP sent via Mocean Verify:', { status: data.status, reqId });
-        return res.json({ message: 'User approved and OTP sent.', userId, otpSent: true, provider: 'mocean' });
-      } catch (e) {
-        const providerError = e?.response?.data;
-        console.error('[APPROVE REGISTRATION] Mocean Verify failed:', providerError || e.message);
-        // Fallback to Mocean SMS with locally generated OTP
-        try {
-          const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
-          const otp = generateOTP();
-          const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-          otpStore.set(user.phone_number, { otp, expiresAt, purpose: 'registration', userId: user.id });
+        otpStore.set(user.phone_number, { otp, expiresAt, purpose: 'registration', userId: user.id });
 
-          const smsBody = new URLSearchParams({
-            'mocean-from': MOCEAN_BRAND,
-            'mocean-to': recipientNumber63,
-            'mocean-text': `Your Billink verification code is ${otp}. It expires in 5 minutes.`
-          });
-          await axios.post('https://rest.moceanapi.com/rest/2/sms', smsBody, {
-            headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` }
-          });
-          console.log('[APPROVE REGISTRATION] OTP sent via Mocean SMS fallback');
-          return res.json({ message: 'User approved and OTP sent.', userId, otpSent: true, provider: 'mocean_sms' });
-        } catch (smsErr) {
-          console.error('[APPROVE REGISTRATION] Mocean SMS fallback failed:', smsErr?.response?.data || smsErr.message);
-          return res.status(502).json({ message: 'User approved, but failed to send OTP via Mocean.', otpSent: false, provider: 'mocean', details: providerError || e.message });
-        }
+        const smsBody = new URLSearchParams({
+          'mocean-from': MOCEAN_BRAND,
+          'mocean-to': recipientNumber63,
+          'mocean-text': `Your Billink verification code is ${otp}. It expires in 5 minutes.`
+        });
+        await axios.post('https://rest.moceanapi.com/rest/2/sms', smsBody, {
+          headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` }
+        });
+        console.log('[APPROVE REGISTRATION] OTP sent via Mocean SMS (forced)');
+        return res.json({ message: 'User approved and OTP sent.', userId, otpSent: true, provider: 'mocean_sms' });
+      } catch (e) {
+        console.error('[APPROVE REGISTRATION] Forced Mocean SMS failed:', e?.response?.data || e.message);
+        return res.status(502).json({ message: 'User approved, but failed to send OTP via Mocean SMS.', otpSent: false, provider: 'mocean_sms', details: e?.response?.data || e.message });
       }
     }
+
     // No Mocean configured
     console.log('[APPROVE REGISTRATION] No MOCEAN_API_TOKEN configured. Cannot send OTP.');
     return res.status(500).json({ message: 'OTP provider not configured. Set MOCEAN_API_TOKEN.', userId, otpSent: false });
   } catch (error) {
     console.error('[APPROVE REGISTRATION] Error in approveRegistration:', error);
     res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+// Reset password using short-lived resetToken from /api/otp/verify-reset
+exports.resetPasswordWithToken = async (req, res) => {
+  try {
+    const { resetToken, newPassword } = req.body;
+    if (!resetToken || !newPassword) {
+      return res.status(400).json({ message: 'resetToken and newPassword are required' });
+    }
+
+    // Validate password strength (reuse same regex)
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]).{8,}$/;
+    if (!passwordRegex.test(newPassword)) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters long and include at least one uppercase letter, one lowercase letter, one number, and one special character.' });
+    }
+
+    // Verify reset token and extract phoneNumber from it
+    let payload;
+    try {
+      payload = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ message: 'Invalid or expired reset token' });
+    }
+    
+    // Verify token purpose and extract phoneNumber from token (token is source of truth)
+    if (payload.purpose !== 'reset' || !payload.phoneNumber) {
+      return res.status(401).json({ message: 'Invalid reset token' });
+    }
+    
+    const phoneNumber = payload.phoneNumber; // Get phoneNumber from token, not request body
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password in customer_accounts using phoneNumber from token
+    const result = await pool.query(
+      'UPDATE customer_accounts SET password = $1, updated_at = NOW() WHERE phone_number = $2 RETURNING id, username, email, role',
+      [hashedPassword, phoneNumber]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'User not found with this phone number' });
+    }
+
+    // Optionally invalidate sessions; for now, instruct user to log in
+    return res.json({ message: 'Password reset successful. Please log in with your new password.' });
+  } catch (error) {
+    console.error('❌ Reset password error:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
   }
 };
