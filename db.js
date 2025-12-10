@@ -58,19 +58,25 @@ pool.on('connect', () => {
 });
 
 // Test the connection (but don't exit in serverless environments)
-pool
-  .connect()
-  .then((client) => {
-    console.log("✅ PostgreSQL Connected!");
-    console.log(`Database: ${process.env.DB_NAME || process.env.DATABASE_URL || "DWS"}`);
-    client.release(); // Release the client back to the pool
-  })
-  .catch((err) => {
-    console.error("❌ Connection error", err);
-    // Don't exit in serverless/Vercel environment - let it retry on first request
-    if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
+// In serverless, we skip the initial connection test to avoid blocking function initialization
+const isServerless = process.env.VERCEL === '1' || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME;
+
+if (!isServerless) {
+  // Only test connection in non-serverless environments
+  pool
+    .connect()
+    .then((client) => {
+      console.log("✅ PostgreSQL Connected!");
+      console.log(`Database: ${process.env.DB_NAME || process.env.DATABASE_URL || "DWS"}`);
+      client.release(); // Release the client back to the pool
+    })
+    .catch((err) => {
+      console.error("❌ Connection error", err);
       process.exit(1);
-    }
-  });
+    });
+} else {
+  // In serverless, log that we're deferring connection test
+  console.log("📦 Serverless environment detected - database connection will be tested on first request");
+}
 
 module.exports = pool;
