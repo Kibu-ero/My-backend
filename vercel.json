@@ -1,5 +1,0 @@
-{
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "https://my-backend-mz4k.onrender.com/api/$1" }
-  ]
-}
