@@ -3,9 +3,12 @@ const { Pool } = require("pg");
 
 // Prefer DATABASE_URL if provided; otherwise, fall back to individual vars
 // Render PostgreSQL always requires SSL
-const isRender = process.env.RENDER === "true" || process.env.DATABASE_URL?.includes("render.com");
+const databaseUrl = process.env.DATABASE_URL || '';
+const isRender = process.env.RENDER === "true" || databaseUrl.includes("render.com");
+const hasSslModeRequire = databaseUrl.includes("sslmode=require") || databaseUrl.includes("?ssl=true");
 const shouldUseSsl =
   isRender ||
+  hasSslModeRequire ||
   process.env.PGSSLMODE === "require" ||
   process.env.DB_SSL === "true" ||
   process.env.NODE_ENV === "production";
@@ -18,6 +21,8 @@ const shouldUseSsl =
 const poolConfig = process.env.DATABASE_URL
   ? {
       connectionString: process.env.DATABASE_URL,
+      // SSL configuration: Render PostgreSQL requires SSL with rejectUnauthorized=false
+      // This allows connection to managed PostgreSQL services with self-signed certificates
       ssl: shouldUseSsl ? { rejectUnauthorized: false } : false,
       // Connection pool settings for better reliability
       max: 20, // Maximum number of clients in the pool
