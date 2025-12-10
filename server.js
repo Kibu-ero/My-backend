@@ -60,45 +60,52 @@ app.options(
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Database health check middleware (with timeout)
-const pool = require('./db');
-let dbConnectionStatus = { connected: false, lastCheck: 0 };
-const DB_CHECK_INTERVAL = 5000; // Check every 5 seconds max
+// Database health check middleware - DISABLED for serverless environments
+// In serverless (Vercel), we let individual routes handle database errors
+// to avoid blocking the function with connection checks
+const isServerless = process.env.VERCEL === '1' || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME;
 
-app.use(async (req, res, next) => {
-  // Skip health check for the health endpoint itself
-  if (req.path === '/health' || req.path === '/') {
-    return next();
-  }
-  
-  // Only check database connection if we haven't checked recently
-  const now = Date.now();
-  if (now - dbConnectionStatus.lastCheck > DB_CHECK_INTERVAL || !dbConnectionStatus.connected) {
-    try {
-      // Quick database connectivity check with timeout
-      const client = await Promise.race([
-        pool.connect(),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Database connection timeout')), 3000)
-        )
-      ]);
-      client.release();
-      dbConnectionStatus = { connected: true, lastCheck: now };
-      next();
-    } catch (error) {
-      console.error('❌ Database connection error in middleware:', error.message);
-      dbConnectionStatus = { connected: false, lastCheck: now };
-      return res.status(503).json({ 
-        message: 'Service temporarily unavailable - database connection error',
-        error: 'Database connection failed',
-        code: error.code || 'DB_CONNECTION_ERROR'
-      });
+if (!isServerless) {
+  // Only use database health check in non-serverless environments
+  const pool = require('./db');
+  let dbConnectionStatus = { connected: false, lastCheck: 0 };
+  const DB_CHECK_INTERVAL = 5000; // Check every 5 seconds max
+
+  app.use(async (req, res, next) => {
+    // Skip health check for the health endpoint itself
+    if (req.path === '/health' || req.path === '/') {
+      return next();
     }
-  } else {
-    // Database was recently checked and is connected, proceed
-    next();
-  }
-});
+    
+    // Only check database connection if we haven't checked recently
+    const now = Date.now();
+    if (now - dbConnectionStatus.lastCheck > DB_CHECK_INTERVAL || !dbConnectionStatus.connected) {
+      try {
+        // Quick database connectivity check with timeout
+        const client = await Promise.race([
+          pool.connect(),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Database connection timeout')), 3000)
+          )
+        ]);
+        client.release();
+        dbConnectionStatus = { connected: true, lastCheck: now };
+        next();
+      } catch (error) {
+        console.error('❌ Database connection error in middleware:', error.message);
+        dbConnectionStatus = { connected: false, lastCheck: now };
+        return res.status(503).json({ 
+          message: 'Service temporarily unavailable - database connection error',
+          error: 'Database connection failed',
+          code: error.code || 'DB_CONNECTION_ERROR'
+        });
+      }
+    } else {
+      // Database was recently checked and is connected, proceed
+      next();
+    }
+  });
+}
 
 // Middleware for logging incoming requests
 app.use((req, res, next) => {
@@ -126,6 +133,7 @@ const creditRoutes = require('./src/routes/credits');
 const settingsRoutes = require('./routes/settings');
 
 // Validate that all routes are actually routers (routers are objects with methods like use, get, post, etc.)
+// In serverless, we want to fail gracefully rather than crash the function
 const routes = [
   { name: 'paymentSubmissionRoutes', route: paymentSubmissionRoutes },
   { name: 'cashierBillingRoutes', route: cashierBillingRoutes },
@@ -150,13 +158,23 @@ routes.forEach(({ name, route }) => {
   // Express routers are functions (callable) that also have methods like use, get, post, etc.
   if (!route || (typeof route !== 'function' && typeof route !== 'object') || typeof route.use !== 'function') {
     console.error(`❌ ${name} is not a valid router. Type: ${typeof route}, Value:`, route);
-    throw new Error(`${name} is not a valid Express router`);
+    // In serverless, log error but don't crash - let the route fail at request time
+    if (!isServerless) {
+      throw new Error(`${name} is not a valid Express router`);
+    }
   }
 });
 
-// Initialize automatic penalty processing
-const { schedulePenaltyProcessing } = require('./src/utils/scheduler');
-schedulePenaltyProcessing();
+// Initialize automatic penalty processing (skip in serverless environments)
+// Cron jobs don't work in serverless - use external cron service if needed
+if (!isServerless) {
+  try {
+    const { schedulePenaltyProcessing } = require('./src/utils/scheduler');
+    schedulePenaltyProcessing();
+  } catch (error) {
+    console.warn('⚠️ Failed to initialize scheduler (non-critical):', error.message);
+  }
+}
 
 // Route registration
 app.use('/api/payment-submissions', paymentSubmissionRoutes);
