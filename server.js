@@ -1,7 +1,14 @@
 const express = require("express");
 const cors = require("cors");
 const path = require('path');
-require("dotenv").config({ path: path.join(__dirname, '.env') });
+
+// Load environment variables (optional - Vercel provides env vars automatically)
+try {
+  require("dotenv").config({ path: path.join(__dirname, '.env') });
+} catch (error) {
+  // dotenv.config() doesn't throw, but just in case
+  console.warn('⚠️ Could not load .env file (this is normal in production):', error.message);
+}
 
 const app = express();
 // const settingsRoutes = require('./routes/settings');
@@ -60,52 +67,8 @@ app.options(
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Database health check middleware - DISABLED for serverless environments
-// In serverless (Vercel), we let individual routes handle database errors
-// to avoid blocking the function with connection checks
+// Detect serverless environment (used elsewhere)
 const isServerless = process.env.VERCEL === '1' || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME;
-
-if (!isServerless) {
-  // Only use database health check in non-serverless environments
-  const pool = require('./db');
-  let dbConnectionStatus = { connected: false, lastCheck: 0 };
-  const DB_CHECK_INTERVAL = 5000; // Check every 5 seconds max
-
-  app.use(async (req, res, next) => {
-    // Skip health check for the health endpoint itself
-    if (req.path === '/health' || req.path === '/') {
-      return next();
-    }
-    
-    // Only check database connection if we haven't checked recently
-    const now = Date.now();
-    if (now - dbConnectionStatus.lastCheck > DB_CHECK_INTERVAL || !dbConnectionStatus.connected) {
-      try {
-        // Quick database connectivity check with timeout
-        const client = await Promise.race([
-          pool.connect(),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Database connection timeout')), 3000)
-          )
-        ]);
-        client.release();
-        dbConnectionStatus = { connected: true, lastCheck: now };
-        next();
-      } catch (error) {
-        console.error('❌ Database connection error in middleware:', error.message);
-        dbConnectionStatus = { connected: false, lastCheck: now };
-        return res.status(503).json({ 
-          message: 'Service temporarily unavailable - database connection error',
-          error: 'Database connection failed',
-          code: error.code || 'DB_CONNECTION_ERROR'
-        });
-      }
-    } else {
-      // Database was recently checked and is connected, proceed
-      next();
-    }
-  });
-}
 
 // Middleware for logging incoming requests
 app.use((req, res, next) => {
@@ -113,24 +76,37 @@ app.use((req, res, next) => {
   next();
 });
 
-// Routes
-const paymentSubmissionRoutes = require('./routes/paymentSubmission');
-const cashierBillingRoutes = require("./routes/cashierBilling");
-const authRoutes = require("./routes/auth");
-const billingRoutes = require("./routes/billing");
-const employeeRoutes = require("./routes/employees");
-const customerRoutes = require("./routes/customers");
-const paymentRoutes = require("./routes/payments");
-const billRoutes = require("./routes/bills");
-const uploadRoutes = require("./routes/uploads");
-const reportRoutes = require("./routes/reports");
-const dashboardRoutes = require('./routes/dashboard');
-const archiveBillingRouter = require('./routes/archiveBilling');
-const auditLogsRoutes = require('./routes/auditLogs');
-const { router: otpRoutes } = require('./routes/otp');
-const penaltyRoutes = require('./src/routes/penalties');
-const creditRoutes = require('./src/routes/credits');
-const settingsRoutes = require('./routes/settings');
+// Routes - wrap in try-catch for serverless environments
+let paymentSubmissionRoutes, cashierBillingRoutes, authRoutes, billingRoutes;
+let employeeRoutes, customerRoutes, paymentRoutes, billRoutes, uploadRoutes;
+let reportRoutes, dashboardRoutes, archiveBillingRouter, auditLogsRoutes;
+let otpRoutes, penaltyRoutes, creditRoutes, settingsRoutes;
+
+try {
+  paymentSubmissionRoutes = require('./routes/paymentSubmission');
+  cashierBillingRoutes = require("./routes/cashierBilling");
+  authRoutes = require("./routes/auth");
+  billingRoutes = require("./routes/billing");
+  employeeRoutes = require("./routes/employees");
+  customerRoutes = require("./routes/customers");
+  paymentRoutes = require("./routes/payments");
+  billRoutes = require("./routes/bills");
+  uploadRoutes = require("./routes/uploads");
+  reportRoutes = require("./routes/reports");
+  dashboardRoutes = require('./routes/dashboard');
+  archiveBillingRouter = require('./routes/archiveBilling');
+  auditLogsRoutes = require('./routes/auditLogs');
+  otpRoutes = require('./routes/otp').router;
+  penaltyRoutes = require('./src/routes/penalties');
+  creditRoutes = require('./src/routes/credits');
+  settingsRoutes = require('./routes/settings');
+} catch (error) {
+  console.error('❌ Error loading routes:', error);
+  if (!isServerless) {
+    throw error; // Re-throw in non-serverless to fail fast
+  }
+  // In serverless, continue but routes will be undefined
+}
 
 // Validate that all routes are actually routers (routers are objects with methods like use, get, post, etc.)
 // In serverless, we want to fail gracefully rather than crash the function
@@ -155,6 +131,11 @@ const routes = [
 ];
 
 routes.forEach(({ name, route }) => {
+  // Skip validation if route is undefined (failed to load)
+  if (route === undefined) {
+    console.warn(`⚠️ ${name} failed to load - route will not be available`);
+    return;
+  }
   // Express routers are functions (callable) that also have methods like use, get, post, etc.
   if (!route || (typeof route !== 'function' && typeof route !== 'object') || typeof route.use !== 'function') {
     console.error(`❌ ${name} is not a valid router. Type: ${typeof route}, Value:`, route);
@@ -176,24 +157,24 @@ if (!isServerless) {
   }
 }
 
-// Route registration
-app.use('/api/payment-submissions', paymentSubmissionRoutes);
-app.use("/api/cashier-billing", cashierBillingRoutes);
-app.use("/api/auth", authRoutes);
-app.use("/api/customers", customerRoutes);
-app.use("/api/billing", billingRoutes);
-app.use("/api/employees", employeeRoutes);
-app.use("/api/payments", paymentRoutes);
-app.use("/api/bills", billRoutes);
-app.use("/api/uploads", uploadRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-app.use('/api', archiveBillingRouter);
-app.use('/api/audit-logs', auditLogsRoutes);
-app.use('/api/otp', otpRoutes);
-app.use('/api/penalties', penaltyRoutes);
-app.use('/api/credits', creditRoutes);
-app.use('/api/settings', settingsRoutes);
+// Route registration - only register routes that loaded successfully
+if (paymentSubmissionRoutes) app.use('/api/payment-submissions', paymentSubmissionRoutes);
+if (cashierBillingRoutes) app.use("/api/cashier-billing", cashierBillingRoutes);
+if (authRoutes) app.use("/api/auth", authRoutes);
+if (customerRoutes) app.use("/api/customers", customerRoutes);
+if (billingRoutes) app.use("/api/billing", billingRoutes);
+if (employeeRoutes) app.use("/api/employees", employeeRoutes);
+if (paymentRoutes) app.use("/api/payments", paymentRoutes);
+if (billRoutes) app.use("/api/bills", billRoutes);
+if (uploadRoutes) app.use("/api/uploads", uploadRoutes);
+if (reportRoutes) app.use('/api/reports', reportRoutes);
+if (dashboardRoutes) app.use('/api/dashboard', dashboardRoutes);
+if (archiveBillingRouter) app.use('/api', archiveBillingRouter);
+if (auditLogsRoutes) app.use('/api/audit-logs', auditLogsRoutes);
+if (otpRoutes) app.use('/api/otp', otpRoutes);
+if (penaltyRoutes) app.use('/api/penalties', penaltyRoutes);
+if (creditRoutes) app.use('/api/credits', creditRoutes);
+if (settingsRoutes) app.use('/api/settings', settingsRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
