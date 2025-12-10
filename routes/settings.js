@@ -22,6 +22,20 @@ router.get('/', async (req, res) => {
       console.warn('system_settings table does not exist yet, returning empty settings');
       return res.json({});
     }
+    // Check for database connection errors
+    const isDbConnectionError = error.code === 'ECONNREFUSED' || 
+                                error.code === 'ENOTFOUND' || 
+                                error.code === 'ETIMEDOUT' ||
+                                error.code === '28P01' ||
+                                error.message?.includes('connect') ||
+                                error.message?.includes('Connection');
+    
+    if (isDbConnectionError) {
+      return res.status(503).json({ 
+        message: 'Service temporarily unavailable - database connection error',
+        error: 'Database connection failed'
+      });
+    }
     res.status(500).json({ message: 'Failed to fetch settings' });
   }
 });
