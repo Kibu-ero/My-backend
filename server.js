@@ -60,6 +60,46 @@ app.options(
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Database health check middleware (with timeout)
+const pool = require('./db');
+let dbConnectionStatus = { connected: false, lastCheck: 0 };
+const DB_CHECK_INTERVAL = 5000; // Check every 5 seconds max
+
+app.use(async (req, res, next) => {
+  // Skip health check for the health endpoint itself
+  if (req.path === '/health' || req.path === '/') {
+    return next();
+  }
+  
+  // Only check database connection if we haven't checked recently
+  const now = Date.now();
+  if (now - dbConnectionStatus.lastCheck > DB_CHECK_INTERVAL || !dbConnectionStatus.connected) {
+    try {
+      // Quick database connectivity check with timeout
+      const client = await Promise.race([
+        pool.connect(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database connection timeout')), 3000)
+        )
+      ]);
+      client.release();
+      dbConnectionStatus = { connected: true, lastCheck: now };
+      next();
+    } catch (error) {
+      console.error('❌ Database connection error in middleware:', error.message);
+      dbConnectionStatus = { connected: false, lastCheck: now };
+      return res.status(503).json({ 
+        message: 'Service temporarily unavailable - database connection error',
+        error: 'Database connection failed',
+        code: error.code || 'DB_CONNECTION_ERROR'
+      });
+    }
+  } else {
+    // Database was recently checked and is connected, proceed
+    next();
+  }
+});
+
 // Middleware for logging incoming requests
 app.use((req, res, next) => {
   console.log(`Incoming request: ${req.method} ${req.url}`);
