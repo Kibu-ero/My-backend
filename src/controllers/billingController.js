@@ -88,8 +88,18 @@ exports.createBill = async (req, res) => {
     let amount_due = 0;
     
     try {
-      // Skip database rates - use hardcoded rates
-      const rates = [];
+      // Fetch water rates from database
+      const ratesResult = await pool.query(`
+        SELECT 
+          consumption_min, 
+          consumption_max, 
+          rate_per_cubic_meter, 
+          fixed_amount
+        FROM water_rates 
+        WHERE is_active = true 
+        ORDER BY consumption_min
+      `);
+      const rates = ratesResult.rows;
       
       if (rates.length === 0) {
         // Fallback to hardcoded rates if no rates in database
@@ -115,16 +125,17 @@ exports.createBill = async (req, res) => {
         // Use database rates
         let foundRate = false;
         
+        // First, try to find exact match or range match
         for (const rate of rates) {
           const min = rate.consumption_min;
           const max = rate.consumption_max;
           
           // Check if consumption falls within this rate range
           if (consumption >= min && (max === null || consumption <= max)) {
-            if (rate.fixed_amount !== null) {
+            if (rate.fixed_amount !== null && rate.fixed_amount !== undefined) {
               // Use fixed amount
               amount_due = parseFloat(rate.fixed_amount);
-            } else if (rate.rate_per_cubic_meter !== null) {
+            } else if (rate.rate_per_cubic_meter !== null && rate.rate_per_cubic_meter !== undefined) {
               // Use rate per cubic meter
               amount_due = consumption * parseFloat(rate.rate_per_cubic_meter);
             }
@@ -135,14 +146,32 @@ exports.createBill = async (req, res) => {
         
         // If no specific rate found and consumption > 100, use the >100 rate
         if (!foundRate && consumption > 100) {
+          // Find rate for consumption > 100 (consumption_min > 100 or consumption_min = 101)
           const excessRate = rates.find(r => r.consumption_min > 100);
           if (excessRate && excessRate.rate_per_cubic_meter) {
             // Find the base amount for 100 cu.m.
-            const base100Rate = rates.find(r => r.consumption_min === 100);
+            const base100Rate = rates.find(r => r.consumption_min === 100 && r.consumption_max === 100);
             const baseAmount = base100Rate ? parseFloat(base100Rate.fixed_amount) : 3235;
             const excess = consumption - 100;
             amount_due = (excess * parseFloat(excessRate.rate_per_cubic_meter)) + baseAmount;
+            foundRate = true;
+          } else {
+            // Fallback: use last rate or default
+            const lastRate = rates[rates.length - 1];
+            if (lastRate) {
+              if (lastRate.fixed_amount !== null && lastRate.fixed_amount !== undefined) {
+                amount_due = parseFloat(lastRate.fixed_amount);
+              } else if (lastRate.rate_per_cubic_meter) {
+                amount_due = consumption * parseFloat(lastRate.rate_per_cubic_meter);
+              }
+            }
           }
+        }
+        
+        // If still no rate found, use fallback
+        if (!foundRate && amount_due === 0) {
+          console.warn('No matching rate found for consumption:', consumption);
+          amount_due = consumption * 30; // Default fallback rate
         }
       }
     } catch (error) {
