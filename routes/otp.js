@@ -141,25 +141,42 @@ router.post('/start-reset', async (req, res) => {
   try {
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' });
-    // Reuse send with purpose=reset by calling local handler
-    req.body.purpose = 'reset';
-    // Fallthrough to /send logic by calling it explicitly is messy; instead, duplicate minimal steps
-    const recipientNumber63 = normalizeToPH63Format(phoneNumber);
+    
+    // Normalize phone number for consistent storage and lookup
+    const normalizedPhone = normalizeToPH63Format(phoneNumber);
+    if (!validatePH63Number(normalizedPhone)) {
+      return res.status(400).json({ error: 'Invalid phone format. Use 09XXXXXXXXX or 63XXXXXXXXXX (PH).'});
+    }
+    
+    // Check if account exists first
+    const accountCheck = await pool.query(
+      'SELECT id FROM customer_accounts WHERE phone_number = $1 OR phone_number = $2 OR phone_number = $3',
+      [phoneNumber, normalizedPhone, normalizeToPH63Format('0' + phoneNumber.slice(2))] // Try original, normalized, and with 0 prefix
+    );
+    
+    if (accountCheck.rows.length === 0) {
+      // Return generic error to avoid revealing account existence
+      return res.status(400).json({ error: 'Invalid phone number' });
+    }
+    
+    // Use normalized phone for OTP storage to ensure consistency
+    const recipientNumber63 = normalizedPhone;
     if (MOCEAN_API_TOKEN) {
-      if (!validatePH63Number(recipientNumber63)) {
-        return res.status(400).json({ error: 'Invalid phone format. Use 63XXXXXXXXXX (PH).'});
-      }
       const params = new URLSearchParams({ 'mocean-to': recipientNumber63, 'mocean-brand': MOCEAN_BRAND });
       const mres = await axios.post('https://rest.moceanapi.com/rest/2/verify', params, { headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` } });
       const data = mres.data || {};
       const reqId = data.reqid || data.request_id || data.mocean_reqid;
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-      otpStore.set(phoneNumber, { provider: 'mocean', reqId, expiresAt, purpose: 'reset' });
+      // Store with normalized phone number AND original for lookup flexibility
+      otpStore.set(normalizedPhone, { provider: 'mocean', reqId, expiresAt, purpose: 'reset', originalPhone: phoneNumber });
+      otpStore.set(phoneNumber, { provider: 'mocean', reqId, expiresAt, purpose: 'reset', originalPhone: phoneNumber, normalizedPhone });
       return res.json({ message: 'OTP sent', provider: 'mocean', reqId, status: data.status });
     }
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    otpStore.set(phoneNumber, { otp, expiresAt, purpose: 'reset' });
+    // Store with both normalized and original phone numbers
+    otpStore.set(normalizedPhone, { otp, expiresAt, purpose: 'reset', originalPhone: phoneNumber });
+    otpStore.set(phoneNumber, { otp, expiresAt, purpose: 'reset', originalPhone: phoneNumber, normalizedPhone });
     if (!SEMAPHORE_API_KEY) return res.status(500).json({ error: 'SMS service not configured' });
     const params = new URLSearchParams({ apikey: SEMAPHORE_API_KEY, number: recipientNumber63, message: 'Your Billink reset code is: {otp}. Valid for 5 minutes.', sendername: SEMAPHORE_SENDERNAME, code: otp });
     const semaphoreResponse = await axios.post('https://semaphore.co/api/v4/otp', params, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
@@ -176,10 +193,23 @@ router.post('/verify-reset', async (req, res) => {
     const { phoneNumber, otp } = req.body;
     if (!phoneNumber || !otp) return res.status(400).json({ error: 'Phone number and OTP are required' });
     
+    // Normalize phone number for lookup
+    const normalizedPhone = normalizeToPH63Format(phoneNumber);
+    
+    // Try to get stored OTP with both original and normalized phone numbers
+    let stored = otpStore.get(phoneNumber) || otpStore.get(normalizedPhone);
+    if (!stored || stored.purpose !== 'reset') return res.status(400).json({ error: 'OTP not found or expired' });
+    if (new Date() > stored.expiresAt) { 
+      otpStore.delete(phoneNumber);
+      otpStore.delete(normalizedPhone);
+      return res.status(400).json({ error: 'OTP has expired' }); 
+    }
+    
     // First, verify the account exists BEFORE checking OTP (security: don't reveal OTP validity if account doesn't exist)
+    // Use the normalized phone from token or try both formats
     const accountCheck = await pool.query(
-      'SELECT id FROM customer_accounts WHERE phone_number = $1',
-      [phoneNumber]
+      'SELECT id, phone_number FROM customer_accounts WHERE phone_number = $1 OR phone_number = $2 OR phone_number = $3',
+      [phoneNumber, normalizedPhone, stored.normalizedPhone || normalizedPhone]
     );
     
     if (accountCheck.rows.length === 0) {
@@ -187,9 +217,8 @@ router.post('/verify-reset', async (req, res) => {
       return res.status(400).json({ error: 'Invalid OTP or phone number' });
     }
     
-    const stored = otpStore.get(phoneNumber);
-    if (!stored || stored.purpose !== 'reset') return res.status(400).json({ error: 'OTP not found or expired' });
-    if (new Date() > stored.expiresAt) { otpStore.delete(phoneNumber); return res.status(400).json({ error: 'OTP has expired' }); }
+    // Use the actual phone number from database for token
+    const dbPhoneNumber = accountCheck.rows[0].phone_number;
     
     if (stored.provider === 'mocean') {
       const params = new URLSearchParams({ 'mocean-reqid': stored.reqId, 'mocean-code': otp });
@@ -202,12 +231,13 @@ router.post('/verify-reset', async (req, res) => {
       if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
     }
     
-    // OTP verified and account exists - issue short-lived reset token with phoneNumber embedded
+    // OTP verified and account exists - issue short-lived reset token with phoneNumber from DB embedded
     const jwt = require('jsonwebtoken');
-    const resetToken = jwt.sign({ phoneNumber, purpose: 'reset' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+    const resetToken = jwt.sign({ phoneNumber: dbPhoneNumber, purpose: 'reset' }, process.env.JWT_SECRET, { expiresIn: '10m' });
     
-    // clear OTP
+    // clear OTP from both formats
     otpStore.delete(phoneNumber);
+    otpStore.delete(normalizedPhone);
     res.json({ message: 'OTP verified', resetToken });
   } catch (error) {
     console.error('Error verifying reset OTP:', error);
