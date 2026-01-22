@@ -5,6 +5,44 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 const pool = require('../db');
 const path = require('path');
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
+
+// Custom middleware for image serving that accepts token in query params or headers
+const verifyTokenForImages = (req, res, next) => {
+  // Try to get token from Authorization header first
+  let token = null;
+  const authHeader = req.headers['authorization'];
+  if (authHeader) {
+    token = authHeader.split(' ')[1];
+  }
+  
+  // If no token in header, try query parameter (for img tags)
+  if (!token && req.query.token) {
+    token = req.query.token;
+  }
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid token' });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// Middleware to check role for images
+const requireRoleForImages = (...roles) => {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Forbidden: insufficient privileges' });
+    }
+    next();
+  };
+};
 
 // Upload file route
 router.post('/upload', verifyToken, upload.single('file'), async (req, res) => {
@@ -83,10 +121,16 @@ router.delete('/files/:fileId', verifyToken, async (req, res) => {
   }
 });
 
-// Get payment proof image by file path
-router.get('/payment-proofs/:filePath(*)', verifyToken, requireRole('admin', 'cashier'), async (req, res) => {
+// Get payment proof image by file path (supports token in query params for img tags)
+router.get('/payment-proofs/:filePath(*)', verifyTokenForImages, requireRoleForImages('admin', 'cashier'), async (req, res) => {
   try {
-    const filePath = req.params.filePath;
+    let filePath = req.params.filePath;
+    
+    // If filePath doesn't start with payment-proofs/, add it (for backward compatibility)
+    if (!filePath.startsWith('payment-proofs/')) {
+      filePath = `payment-proofs/${filePath}`;
+    }
+    
     const fullPath = path.join(__dirname, '../uploads', filePath);
     
     // Security: prevent directory traversal
@@ -101,10 +145,10 @@ router.get('/payment-proofs/:filePath(*)', verifyToken, requireRole('admin', 'ca
       return res.status(404).json({ error: 'File not found' });
     }
     
-    // Get file info from database for verification
+    // Get file info from database for verification (try both with and without prefix)
     const fileResult = await pool.query(
-      'SELECT * FROM customer_files WHERE file_path = $1',
-      [filePath]
+      'SELECT * FROM customer_files WHERE file_path = $1 OR file_path = $2',
+      [filePath, filePath.replace(/^payment-proofs\//, '')]
     );
     
     if (fileResult.rows.length === 0) {
@@ -320,7 +364,8 @@ router.get('/debug/payment-submissions', verifyToken, requireRole('admin', 'cash
 
 // Get payment proof image by file path (generic route - must be last to avoid conflicts)
 // This route handles paths like: /api/uploads/payment-proofs/filename.png or /api/uploads/filename.png
-router.get('/:filePath(*)', verifyToken, requireRole('admin', 'cashier'), async (req, res) => {
+// Supports token in query params for img tags: /api/uploads/filepath?token=xxx
+router.get('/:filePath(*)', verifyTokenForImages, requireRoleForImages('admin', 'cashier'), async (req, res) => {
   try {
     const filePath = req.params.filePath;
     
@@ -343,10 +388,16 @@ router.get('/:filePath(*)', verifyToken, requireRole('admin', 'cashier'), async 
       return res.status(404).json({ error: 'File not found' });
     }
     
-    // Get file info from database for verification
+    // Get file info from database for verification (try both with and without prefix)
+    let dbFilePath = filePath;
+    // If filePath doesn't include payment-proofs/, try with it
+    if (!filePath.includes('payment-proofs/')) {
+      dbFilePath = `payment-proofs/${filePath}`;
+    }
+    
     const fileResult = await pool.query(
       'SELECT * FROM customer_files WHERE file_path = $1 OR file_path = $2',
-      [filePath, `payment-proofs/${filePath}`]
+      [filePath, dbFilePath]
     );
     
     if (fileResult.rows.length === 0) {
