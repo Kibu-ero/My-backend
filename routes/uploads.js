@@ -83,6 +83,48 @@ router.delete('/files/:fileId', verifyToken, async (req, res) => {
   }
 });
 
+// Get payment proof image by file path
+router.get('/payment-proofs/:filePath(*)', verifyToken, requireRole('admin', 'cashier'), async (req, res) => {
+  try {
+    const filePath = req.params.filePath;
+    const fullPath = path.join(__dirname, '../uploads', filePath);
+    
+    // Security: prevent directory traversal
+    const normalizedPath = path.normalize(fullPath);
+    const uploadsDir = path.normalize(path.join(__dirname, '../uploads'));
+    if (!normalizedPath.startsWith(uploadsDir)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    // Check if file exists
+    if (!fs.existsSync(normalizedPath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Get file info from database for verification
+    const fileResult = await pool.query(
+      'SELECT * FROM customer_files WHERE file_path = $1',
+      [filePath]
+    );
+    
+    if (fileResult.rows.length === 0) {
+      return res.status(404).json({ error: 'File not found in database' });
+    }
+    
+    const file = fileResult.rows[0];
+    
+    // Set appropriate headers
+    res.setHeader('Content-Type', file.file_type || 'image/png');
+    res.setHeader('Content-Disposition', `inline; filename="${file.file_name}"`);
+    
+    // Send file
+    res.sendFile(normalizedPath);
+  } catch (error) {
+    console.error('Error serving payment proof:', error);
+    res.status(500).json({ error: 'Error serving payment proof' });
+  }
+});
+
 // Admin: Get all uploaded files (pending payment proofs only)
 router.get('/all', verifyToken, requireRole('admin', 'cashier'), async (req, res) => {
   try {
@@ -273,6 +315,55 @@ router.get('/debug/payment-submissions', verifyToken, requireRole('admin', 'cash
   } catch (error) {
     console.error('Debug error:', error);
     res.status(500).json({ error: 'Debug error: ' + error.message });
+  }
+});
+
+// Get payment proof image by file path (generic route - must be last to avoid conflicts)
+// This route handles paths like: /api/uploads/payment-proofs/filename.png or /api/uploads/filename.png
+router.get('/:filePath(*)', verifyToken, requireRole('admin', 'cashier'), async (req, res) => {
+  try {
+    const filePath = req.params.filePath;
+    
+    // Skip if this is a known route
+    if (filePath === 'all' || filePath.startsWith('file/') || filePath.startsWith('debug/')) {
+      return res.status(404).json({ error: 'Route not found' });
+    }
+    
+    const fullPath = path.join(__dirname, '../uploads', filePath);
+    
+    // Security: prevent directory traversal
+    const normalizedPath = path.normalize(fullPath);
+    const uploadsDir = path.normalize(path.join(__dirname, '../uploads'));
+    if (!normalizedPath.startsWith(uploadsDir)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    // Check if file exists
+    if (!fs.existsSync(normalizedPath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Get file info from database for verification
+    const fileResult = await pool.query(
+      'SELECT * FROM customer_files WHERE file_path = $1 OR file_path = $2',
+      [filePath, `payment-proofs/${filePath}`]
+    );
+    
+    if (fileResult.rows.length === 0) {
+      return res.status(404).json({ error: 'File not found in database' });
+    }
+    
+    const file = fileResult.rows[0];
+    
+    // Set appropriate headers
+    res.setHeader('Content-Type', file.file_type || 'image/png');
+    res.setHeader('Content-Disposition', `inline; filename="${file.file_name}"`);
+    
+    // Send file
+    res.sendFile(normalizedPath);
+  } catch (error) {
+    console.error('Error serving payment proof:', error);
+    res.status(500).json({ error: 'Error serving payment proof' });
   }
 });
 
