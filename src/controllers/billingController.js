@@ -25,45 +25,45 @@ exports.createBill = async (req, res) => {
       return res.status(400).json({ message: "Current reading must be greater than or equal to previous reading" });
     }
 
-    // 4. TEMPORARILY DISABLED: Enforce encoder limit: only 1 bill per customer per month
-    // const userRole = req.user?.role || req.user?.userRole || null;
-    // const isEncoder = userRole && (userRole.toLowerCase() === 'encoder');
-    // 
-    // if (isEncoder) {
-    //   // Check if a bill already exists for this customer in the current month
-    //   // We check based on the billing month (created_at) to ensure only one bill per month
-    //   const currentDate = new Date();
-    //   const currentYear = currentDate.getFullYear();
-    //   const currentMonth = currentDate.getMonth() + 1; // JavaScript months are 0-indexed
-    //   
-    //   try {
-    //     const checkResult = await pool.query(
-    //       `SELECT bill_id, created_at, status
-    //        FROM billing
-    //        WHERE customer_id = $1
-    //          AND EXTRACT(YEAR FROM created_at) = $2
-    //          AND EXTRACT(MONTH FROM created_at) = $3
-    //          AND (status IS NULL OR status != 'Cancelled')
-    //        LIMIT 1`,
-    //       [customer_id, currentYear, currentMonth]
-    //     );
-    //     
-    //     if (checkResult.rows.length > 0) {
-    //       const existingBill = checkResult.rows[0];
-    //       console.log(`❌ Encoder attempted to create duplicate bill. Customer: ${customer_id}, Existing Bill ID: ${existingBill.bill_id}, Created: ${existingBill.created_at}`);
-    //       return res.status(409).json({
-    //         message: 'Only one bill per customer is allowed per month. A bill for this customer already exists for the current month.',
-    //         existingBillId: existingBill.bill_id
-    //       });
-    //     }
-    //   } catch (error) {
-    //     console.error('❌ Error checking encoder bill limit:', error);
-    //     // If there's an error checking, we should block the request to be safe
-    //     return res.status(500).json({
-    //       message: 'Error validating bill creation. Please try again or contact support.'
-    //     });
-    //   }
-    // }
+    // 4. Enforce encoder limit: only 1 bill per customer per month
+    const userRole = req.user?.role || req.user?.userRole || null;
+    const isEncoder = userRole && (userRole.toLowerCase() === 'encoder');
+    
+    if (isEncoder) {
+      // Check if a bill already exists for this customer in the current month
+      // We check based on the billing month (created_at) to ensure only one bill per month
+      const currentDate = new Date();
+      const currentYear = currentDate.getFullYear();
+      const currentMonth = currentDate.getMonth() + 1; // JavaScript months are 0-indexed
+      
+      try {
+        const checkResult = await pool.query(
+          `SELECT bill_id, created_at, status
+           FROM billing
+           WHERE customer_id = $1
+             AND EXTRACT(YEAR FROM created_at) = $2
+             AND EXTRACT(MONTH FROM created_at) = $3
+             AND (status IS NULL OR status != 'Cancelled')
+           LIMIT 1`,
+          [customer_id, currentYear, currentMonth]
+        );
+        
+        if (checkResult.rows.length > 0) {
+          const existingBill = checkResult.rows[0];
+          console.log(`❌ Encoder attempted to create duplicate bill. Customer: ${customer_id}, Existing Bill ID: ${existingBill.bill_id}, Created: ${existingBill.created_at}`);
+          return res.status(409).json({
+            message: 'Only one bill per customer is allowed per month. A bill for this customer already exists for the current month.',
+            existingBillId: existingBill.bill_id
+          });
+        }
+      } catch (error) {
+        console.error('❌ Error checking encoder bill limit:', error);
+        // If there's an error checking, we should block the request to be safe
+        return res.status(500).json({
+          message: 'Error validating bill creation. Please try again or contact support.'
+        });
+      }
+    }
 
     // 5. Calculate water consumption
     const consumption = currReading - prevReading;
