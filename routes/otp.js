@@ -201,9 +201,31 @@ router.post('/start-reset', async (req, res) => {
     otpStore.set(normalizedPhone, { otp, expiresAt, purpose: 'reset', originalPhone: phoneNumber });
     otpStore.set(phoneNumber, { otp, expiresAt, purpose: 'reset', originalPhone: phoneNumber, normalizedPhone });
     
+    if (!SEMAPHORE_API_KEY && !MOCEAN_API_TOKEN) {
+      console.error('❌ [PASSWORD RESET] SMS service not configured - no API keys found');
+      // In development, allow OTP generation without SMS (for testing)
+      if (process.env.NODE_ENV === 'development') {
+        console.log('⚠️ [PASSWORD RESET] Development mode - OTP generated but not sent via SMS');
+        console.log('⚠️ [PASSWORD RESET] OTP for testing:', otp);
+        return res.json({ 
+          message: 'OTP generated (development mode - SMS not configured)', 
+          provider: 'development',
+          otp: otp, // Include OTP in response for development
+          warning: 'SMS service not configured. This OTP is for testing only.'
+        });
+      }
+      return res.status(503).json({ 
+        error: 'SMS service is currently unavailable. Please contact support for password reset assistance.',
+        code: 'SMS_NOT_CONFIGURED'
+      });
+    }
+    
     if (!SEMAPHORE_API_KEY) {
-      console.error('❌ [PASSWORD RESET] SMS service not configured');
-      return res.status(500).json({ error: 'SMS service not configured' });
+      // This shouldn't happen if we got here, but just in case
+      return res.status(503).json({ 
+        error: 'SMS service is currently unavailable. Please contact support.',
+        code: 'SMS_NOT_CONFIGURED'
+      });
     }
     
     try {
@@ -221,7 +243,7 @@ router.post('/start-reset', async (req, res) => {
     } catch (semaphoreError) {
       console.error('❌ [PASSWORD RESET] Semaphore error:', semaphoreError.response?.data || semaphoreError.message);
       return res.status(500).json({ 
-        error: 'Failed to send OTP', 
+        error: 'Failed to send OTP via SMS. Please try again later or contact support.', 
         details: semaphoreError.response?.data || semaphoreError.message 
       });
     }
