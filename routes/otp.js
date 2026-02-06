@@ -140,50 +140,98 @@ router.post('/send', async (req, res) => {
 router.post('/start-reset', async (req, res) => {
   try {
     const { phoneNumber } = req.body;
-    if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' });
+    console.log('🔐 [PASSWORD RESET] Request received:', { phoneNumber });
+    
+    if (!phoneNumber) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
     
     // Normalize phone number for consistent storage and lookup
     const normalizedPhone = normalizeToPH63Format(phoneNumber);
+    console.log('📱 [PASSWORD RESET] Normalized phone:', normalizedPhone);
+    
     if (!validatePH63Number(normalizedPhone)) {
+      console.log('❌ [PASSWORD RESET] Invalid phone format');
       return res.status(400).json({ error: 'Invalid phone format. Use 09XXXXXXXXX or 63XXXXXXXXXX (PH).'});
     }
     
     // Check if account exists first
-    const accountCheck = await pool.query(
-      'SELECT id FROM customer_accounts WHERE phone_number = $1 OR phone_number = $2 OR phone_number = $3',
-      [phoneNumber, normalizedPhone, normalizeToPH63Format('0' + phoneNumber.slice(2))] // Try original, normalized, and with 0 prefix
-    );
+    let accountCheck;
+    try {
+      accountCheck = await pool.query(
+        'SELECT id FROM customer_accounts WHERE phone_number = $1 OR phone_number = $2 OR phone_number = $3',
+        [phoneNumber, normalizedPhone, normalizeToPH63Format('0' + phoneNumber.slice(2))] // Try original, normalized, and with 0 prefix
+      );
+      console.log('🔍 [PASSWORD RESET] Account check result:', accountCheck.rows.length);
+    } catch (dbError) {
+      console.error('❌ [PASSWORD RESET] Database error:', dbError);
+      return res.status(500).json({ error: 'Database error', details: dbError.message });
+    }
     
     if (accountCheck.rows.length === 0) {
       // Return generic error to avoid revealing account existence
+      console.log('❌ [PASSWORD RESET] Account not found');
       return res.status(400).json({ error: 'Invalid phone number' });
     }
     
     // Use normalized phone for OTP storage to ensure consistency
     const recipientNumber63 = normalizedPhone;
+    
     if (MOCEAN_API_TOKEN) {
-      const params = new URLSearchParams({ 'mocean-to': recipientNumber63, 'mocean-brand': MOCEAN_BRAND });
-      const mres = await axios.post('https://rest.moceanapi.com/rest/2/verify', params, { headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` } });
-      const data = mres.data || {};
-      const reqId = data.reqid || data.request_id || data.mocean_reqid;
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-      // Store with normalized phone number AND original for lookup flexibility
-      otpStore.set(normalizedPhone, { provider: 'mocean', reqId, expiresAt, purpose: 'reset', originalPhone: phoneNumber });
-      otpStore.set(phoneNumber, { provider: 'mocean', reqId, expiresAt, purpose: 'reset', originalPhone: phoneNumber, normalizedPhone });
-      return res.json({ message: 'OTP sent', provider: 'mocean', reqId, status: data.status });
+      try {
+        const params = new URLSearchParams({ 'mocean-to': recipientNumber63, 'mocean-brand': MOCEAN_BRAND });
+        const mres = await axios.post('https://rest.moceanapi.com/rest/2/verify', params, { headers: { Authorization: `Bearer ${MOCEAN_API_TOKEN}` } });
+        const data = mres.data || {};
+        const reqId = data.reqid || data.request_id || data.mocean_reqid;
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+        // Store with normalized phone number AND original for lookup flexibility
+        otpStore.set(normalizedPhone, { provider: 'mocean', reqId, expiresAt, purpose: 'reset', originalPhone: phoneNumber });
+        otpStore.set(phoneNumber, { provider: 'mocean', reqId, expiresAt, purpose: 'reset', originalPhone: phoneNumber, normalizedPhone });
+        console.log('✅ [PASSWORD RESET] OTP sent via Mocean');
+        return res.json({ message: 'OTP sent', provider: 'mocean', reqId, status: data.status });
+      } catch (moceanError) {
+        console.error('❌ [PASSWORD RESET] Mocean error:', moceanError.response?.data || moceanError.message);
+        // Fall through to Semaphore
+      }
     }
+    
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     // Store with both normalized and original phone numbers
     otpStore.set(normalizedPhone, { otp, expiresAt, purpose: 'reset', originalPhone: phoneNumber });
     otpStore.set(phoneNumber, { otp, expiresAt, purpose: 'reset', originalPhone: phoneNumber, normalizedPhone });
-    if (!SEMAPHORE_API_KEY) return res.status(500).json({ error: 'SMS service not configured' });
-    const params = new URLSearchParams({ apikey: SEMAPHORE_API_KEY, number: recipientNumber63, message: 'Your Billink reset code is: {otp}. Valid for 5 minutes.', sendername: SEMAPHORE_SENDERNAME, code: otp });
-    const semaphoreResponse = await axios.post('https://semaphore.co/api/v4/otp', params, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-    const responseData = Array.isArray(semaphoreResponse.data) ? semaphoreResponse.data[0] : semaphoreResponse.data;
-    res.json({ message: 'OTP sent', provider: 'semaphore', messageId: responseData?.message_id, status: responseData?.status, recipient: responseData?.recipient });
+    
+    if (!SEMAPHORE_API_KEY) {
+      console.error('❌ [PASSWORD RESET] SMS service not configured');
+      return res.status(500).json({ error: 'SMS service not configured' });
+    }
+    
+    try {
+      const params = new URLSearchParams({ 
+        apikey: SEMAPHORE_API_KEY, 
+        number: recipientNumber63, 
+        message: 'Your Billink reset code is: {otp}. Valid for 5 minutes.', 
+        sendername: SEMAPHORE_SENDERNAME, 
+        code: otp 
+      });
+      const semaphoreResponse = await axios.post('https://semaphore.co/api/v4/otp', params, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+      const responseData = Array.isArray(semaphoreResponse.data) ? semaphoreResponse.data[0] : semaphoreResponse.data;
+      console.log('✅ [PASSWORD RESET] OTP sent via Semaphore');
+      return res.json({ message: 'OTP sent', provider: 'semaphore', messageId: responseData?.message_id, status: responseData?.status, recipient: responseData?.recipient });
+    } catch (semaphoreError) {
+      console.error('❌ [PASSWORD RESET] Semaphore error:', semaphoreError.response?.data || semaphoreError.message);
+      return res.status(500).json({ 
+        error: 'Failed to send OTP', 
+        details: semaphoreError.response?.data || semaphoreError.message 
+      });
+    }
   } catch (error) {
-    res.status(500).json({ error: 'Failed to start password reset', details: error?.response?.data || error.message });
+    console.error('❌ [PASSWORD RESET] Unexpected error:', error);
+    console.error('❌ [PASSWORD RESET] Error stack:', error.stack);
+    return res.status(500).json({ 
+      error: 'Failed to start password reset', 
+      details: error?.response?.data || error.message 
+    });
   }
 });
 
